@@ -43,6 +43,9 @@ async function loadScene(sceneID) {
   if (typeof syncSessionStateToGlobal === 'function') {
     syncSessionStateToGlobal();
   }
+  if (typeof applyManualPauseUI === 'function') {
+    applyManualPauseUI();
+  }
 
 
   // Load scene-specific data into global variables
