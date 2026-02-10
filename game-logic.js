@@ -59,6 +59,9 @@ let manualPauseState = {
   remainingSeconds: null
 };   // Tracks manual pause/play state
 
+// True only when the current turn is actively awaiting player input.
+let isResponseInputActive = false;
+
 
 window.actualCurrentScene = actualCurrentScene;
 window.isViewingHistoricalScene = isViewingHistoricalScene;
@@ -240,7 +243,8 @@ function getSingaporeDateTime() {
 
 function startRound() {
   currentStep = 0;
-  
+  isResponseInputActive = false;
+
   // Ensure response input visibility is correct for current scene state
   updateResponseInputAreaVisibility();
   updateResponseTimerVisibility();
@@ -401,6 +405,8 @@ function displayPlayerResponse(turnData) {
     return; // Don't display input for past scenes
   }
 
+  isResponseInputActive = true;
+  
   let dialogueHTML = turnData.dialogue;
 
   if (turnData.blanks) {
@@ -530,6 +536,7 @@ function submitResponse() {
   conversationHistory.appendChild(playerResponseEl);
 
   document.getElementById('response-input-area').style.display = 'none';
+  isResponseInputActive = false;
   scrollToBottom();
 
   // Check if resource block should appear after player's response
@@ -1593,6 +1600,9 @@ function resumeActiveConversation() {
     currentRound = state.currentRound;
     currentStep = state.currentStep;
     responseSeconds = state.responseSeconds;
+    const roundTurns = CONVERSATION_DATA.filter(d => d.round === currentRound);
+    const activeTurn = roundTurns[currentStep];
+    isResponseInputActive = Boolean(activeTurn?.speaker !== 'Kenji');
     console.log(`✅ Restored Round ${currentRound}, Step ${currentStep}`);
   }
 
@@ -1604,13 +1614,9 @@ function resumeActiveConversation() {
   isViewingHistoricalScene = false;
   console.log('✅ Historical view flag reset');
 
-  // 4) SHOW RESPONSE INPUT AREA
-  const inputArea = document.getElementById('response-input-area');
-  if (inputArea) {
-    inputArea.style.display = 'block';
-    inputArea.classList.remove('disabled-overlay');
-    console.log('✅ Response input area shown and enabled');
-  }
+  // 4) SHOW/HIDE RESPONSE INPUT AREA ACCORDING TO CURRENT TURN
+  updateResponseInputAreaVisibility();
+  console.log('✅ Response input area visibility refreshed');
 
 
   // 6) RESTART TIMER IF NEEDED
@@ -1720,7 +1726,8 @@ function updateResponseInputAreaVisibility() {
 
   // SHOW ONLY IF: on actual current scene AND not viewing historical scene
   const shouldShow = (gameSession?.currentScene === actualCurrentScene) && 
-                     !isViewingHistoricalScene && 
+                     !isViewingHistoricalScene &&
+                     isResponseInputActive && 
                      gameSession?.currentScene !== undefined;
 
   if (shouldShow) {
@@ -1751,6 +1758,7 @@ function updateResponseTimerVisibility() {
   // SHOW ONLY IF: on actual current scene AND not viewing historical scene
   const shouldShow = (gameSession?.currentScene === actualCurrentScene) && 
                       !isViewingHistoricalScene &&
+                      isResponseInputActive &&
                       !manualPauseState?.isPaused &&
                      gameSession?.currentScene !== undefined;
 
