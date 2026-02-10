@@ -59,6 +59,7 @@ let manualPauseState = {
   remainingSeconds: null
 };   // Tracks manual pause/play state
 
+
 window.actualCurrentScene = actualCurrentScene;
 window.isViewingHistoricalScene = isViewingHistoricalScene;
 window.manualPauseState = manualPauseState;
@@ -1374,6 +1375,11 @@ function navigateNextScene() {
     isViewingHistoricalScene = false;
     actualCurrentScene = nextScene;
     window.actualCurrentScene = actualCurrentScene;
+    // Sync session state before resume validation/auto-fix logic runs
+    gameSession.currentScene = nextScene;
+    gameSession.isViewingHistoricalScene = false;
+    sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
+
     resumeActiveConversation();
     hideHistoricalViewBanner();
     applyManualPauseUI();
@@ -1517,7 +1523,8 @@ function toggleManualPause() {
 
 function pauseActiveConversation() {
   console.log('=== PAUSING CONVERSATION ===');
-  
+  const wasTimerActive = responseTimer !== null;
+
   // 1) STOP THE RESPONSE TIMER
   if (responseTimer) {
     clearInterval(responseTimer);
@@ -1530,7 +1537,7 @@ function pauseActiveConversation() {
     currentRound: currentRound,
     currentStep: currentStep,
     responseSeconds: responseSeconds,
-    isTimerActive: responseTimer !== null
+    isTimerActive: wasTimerActive
   };
   console.log('✅ Paused state stored:', pausedConversationState);
 
@@ -1817,7 +1824,7 @@ function validateGameState() {
   }
 
   // VALIDATION 7: Check if pausedConversationState is set when needed
-  if (gameSession?.currentScene !== actualCurrentScene && !isViewingHistoricalScene && !pausedConversationState) {
+  if (gameSession?.currentScene !== actualCurrentScene && isViewingHistoricalScene && !pausedConversationState) {
     warnings.push('On inactive scene but no pausedConversationState stored');
   }
 
