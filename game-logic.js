@@ -1501,7 +1501,6 @@ function updatePausePlayButtonState() {
 function applyManualPauseUI() {
   const inputArea = document.getElementById('response-input-area');
   const banner = document.getElementById('manual-pause-banner');
-  const overlay = document.getElementById('manual-pause-overlay');
   const isPaused = manualPauseState?.isPaused;
 
   if (inputArea) {
@@ -1513,14 +1512,6 @@ function applyManualPauseUI() {
       banner.classList.remove('hidden');
     } else {
       banner.classList.add('hidden');
-    }
-  }
-
-  if (overlay) {
-    if (isPaused && !isViewingHistoricalScene) {
-      overlay.classList.remove('hidden');
-    } else {
-      overlay.classList.add('hidden');
     }
   }
 
@@ -1576,7 +1567,6 @@ function resumeManualPause() {
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   const shouldResumeTimer = (gameSession?.currentScene === actualCurrentScene) &&
     !isViewingHistoricalScene &&
-    isAwaitingPlayerResponse &&
     typeof remainingSeconds === 'number';
 
   if (shouldResumeTimer) {
@@ -1713,6 +1703,9 @@ function resumeActiveConversation() {
   syncGlobalStateToSession();
 
   applyManualPauseUI();
+  if (manualPauseState?.isPaused) {
+    applyManualPauseUI();
+  }
   
   console.log(`✅ Conversation resumed at Round ${currentRound}, Step ${currentStep}`);
   console.log('=== RESUME COMPLETE ===');
@@ -1910,6 +1903,7 @@ function validateGameState() {
     isViewingHistoricalScene ||
     manualPauseState?.isPaused ||
     !isAwaitingPlayerResponse;
+    manualPauseState?.isPaused;
   const actualDisabled = inputArea?.classList.contains('disabled-overlay') ||
     inputArea?.classList.contains('manual-paused') ||
     inputArea?.style.display === 'none';
