@@ -1171,6 +1171,18 @@ window.loadDecisionCheckpointBarrier = loadDecisionCheckpointBarrier;
 // SCENE NAVIGATION & CONVERSATION HISTORY
 // ============================================
 
+function getCurrentSceneHistoryIndex(gameSession) {
+  const history = gameSession?.sceneHistory;
+  if (!Array.isArray(history) || history.length === 0) return -1;
+
+  const storedIndex = gameSession?.currentSceneHistoryIndex;
+  if (Number.isInteger(storedIndex) && storedIndex >= 0 && storedIndex < history.length) {
+    return storedIndex;
+  }
+
+  return history.lastIndexOf(gameSession.currentScene);
+}
+
 function updateSceneTitle() {
   const sceneTitle = window.SCENE_META?.sceneTitle || 'THE CONVERSATION';
   const titleElement = document.getElementById('scene-title');
@@ -1239,7 +1251,7 @@ function navigatePreviousScene() {
   }
 
   // Find current position in scene history
-  const currentSceneInHistory = gameSession.sceneHistory.indexOf(gameSession.currentScene);
+  const currentSceneInHistory = getCurrentSceneHistoryIndex(gameSession);
   
   // Check if we can go to previous scene
   if (currentSceneInHistory <= 0) {
@@ -1248,7 +1260,8 @@ function navigatePreviousScene() {
   }
 
   // Get the previous scene from history array
-  const previousScene = gameSession.sceneHistory[currentSceneInHistory - 1];
+  const previousSceneIndex = currentSceneInHistory - 1;
+  const previousScene = gameSession.sceneHistory[previousSceneIndex];
 
   // Verify previous scene conversation exists
   if (!gameSession.conversationHistory || !Object.prototype.hasOwnProperty.call(gameSession.conversationHistory, previousScene)) {
@@ -1294,6 +1307,7 @@ function navigatePreviousScene() {
 
   // STEP 6: UPDATE SESSION STATE
   gameSession.currentScene = previousScene;
+  gameSession.currentSceneHistoryIndex = previousSceneIndex;
   gameSession.isViewingHistoricalScene = isViewingHistoricalScene;
   sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
   syncGlobalStateToSession();
@@ -1344,7 +1358,7 @@ function navigateNextScene() {
   }
 
   // Find current position in scene history
-  const currentSceneInHistory = gameSession.sceneHistory.indexOf(gameSession.currentScene);
+  const currentSceneInHistory = getCurrentSceneHistoryIndex(gameSession);
   
   // Check if we can go to next scene
   if (currentSceneInHistory < 0 || currentSceneInHistory >= gameSession.sceneHistory.length - 1) {
@@ -1353,7 +1367,8 @@ function navigateNextScene() {
   }
 
   // Get the next scene from history array
-  const nextScene = gameSession.sceneHistory[currentSceneInHistory + 1];
+  const nextSceneIndex = currentSceneInHistory + 1;
+  const nextScene = gameSession.sceneHistory[nextSceneIndex];
 
   // Verify next scene conversation exists
   if (!gameSession.conversationHistory || !Object.prototype.hasOwnProperty.call(gameSession.conversationHistory, nextScene)) {
@@ -1388,6 +1403,7 @@ function navigateNextScene() {
     window.actualCurrentScene = actualCurrentScene;
     // Sync session state before resume validation/auto-fix logic runs
     gameSession.currentScene = nextScene;
+    gameSession.currentSceneHistoryIndex = nextSceneIndex;
     gameSession.isViewingHistoricalScene = false;
     sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
 
@@ -1409,6 +1425,7 @@ function navigateNextScene() {
 
   // STEP 5: UPDATE SESSION STATE
   gameSession.currentScene = nextScene;
+  gameSession.currentSceneHistoryIndex = nextSceneIndex;
   gameSession.isViewingHistoricalScene = isViewingHistoricalScene;
   sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
   syncGlobalStateToSession();
