@@ -25,7 +25,11 @@ async function loadScene(sceneID) {
   gameSession.pausedConversationState = null;
   
   if (!gameSession.sceneHistory) gameSession.sceneHistory = [];
-  gameSession.sceneHistory.push(sceneID);
+  const lastSceneInHistory = gameSession.sceneHistory[gameSession.sceneHistory.length - 1];
+  if (lastSceneInHistory !== sceneID) {
+    gameSession.sceneHistory.push(sceneID);
+  }
+  gameSession.currentSceneHistoryIndex = gameSession.sceneHistory.length - 1;
 
   // Initialize conversation history storage if not exists
   if (!gameSession.conversationHistory) {
