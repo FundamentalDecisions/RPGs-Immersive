@@ -1201,8 +1201,8 @@ function loadSceneConversation(sceneID) {
   
   const conversationHistory = document.getElementById('conversation-history');
   
-  if (gameSession.conversationHistory && gameSession.conversationHistory[sceneID]) {
-    conversationHistory.innerHTML = gameSession.conversationHistory[sceneID];
+  if (gameSession.conversationHistory && Object.prototype.hasOwnProperty.call(gameSession.conversationHistory, sceneID)) {
+    conversationHistory.innerHTML = gameSession.conversationHistory[sceneID] || '';
     
     // AFTER LOADING CONVERSATION, CHECK IF DECISION CHECKPOINT BARRIER SHOULD BE SHOWN
     setTimeout(() => {
@@ -1251,8 +1251,10 @@ function navigatePreviousScene() {
   const previousScene = gameSession.sceneHistory[currentSceneInHistory - 1];
 
   // Verify previous scene conversation exists
-  if (!gameSession.conversationHistory || !gameSession.conversationHistory[previousScene]) {
+  if (!gameSession.conversationHistory || !Object.prototype.hasOwnProperty.call(gameSession.conversationHistory, previousScene)) {
     console.warn(`Conversation history for scene ${previousScene} not found`);
+    console.warn(`Auto-recover: loading Scene ${previousScene} from start.`);
+    loadScene(previousScene);
     return;
   }
 
@@ -1354,8 +1356,10 @@ function navigateNextScene() {
   const nextScene = gameSession.sceneHistory[currentSceneInHistory + 1];
 
   // Verify next scene conversation exists
-  if (!gameSession.conversationHistory || !gameSession.conversationHistory[nextScene]) {
+  if (!gameSession.conversationHistory || !Object.prototype.hasOwnProperty.call(gameSession.conversationHistory, nextScene)) {
     console.warn(`Conversation history for scene ${nextScene} not found`);
+    console.warn(`Auto-recover: loading Scene ${nextScene} from start.`);
+    loadScene(nextScene);
     return;
   }
 
@@ -1511,6 +1515,7 @@ function resumeManualPause() {
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   const shouldResumeTimer = (gameSession?.currentScene === actualCurrentScene) &&
     !isViewingHistoricalScene &&
+    isResponseInputActive &&
     typeof remainingSeconds === 'number';
 
   if (shouldResumeTimer) {
@@ -1556,14 +1561,9 @@ function pauseActiveConversation() {
     console.log('✅ Response input area hidden and disabled');
   }
 
-  // 4) CLEAR THE CURRENT PLAYER INPUT CONTENT
-  if (!manualPauseState?.isPaused) {
-    const currentPlayerInput = document.getElementById('current-player-input');
-    if (currentPlayerInput) {
-      currentPlayerInput.innerHTML = '';
-      console.log('✅ Current player input cleared');
-    }
-  }
+  // 4) PRESERVE CURRENT PLAYER INPUT CONTENT
+  // Keep any in-progress typed draft when navigating away so returning + Play can resume
+  // the same waiting-for-player state instead of silently auto-submitting empty blanks.
 
   // 5) SET GLOBAL FLAG
   isViewingHistoricalScene = true;
@@ -1816,7 +1816,7 @@ function validateGameState() {
   }
 
   // VALIDATION 4: Check if conversation history exists for current scene
-  if (!gameSession?.conversationHistory?.[gameSession?.currentScene]) {
+  if (!gameSession?.conversationHistory || !Object.prototype.hasOwnProperty.call(gameSession.conversationHistory, gameSession?.currentScene)) {
     warnings.push(`No conversation history for scene ${gameSession?.currentScene}`);
   }
 
