@@ -1561,7 +1561,19 @@ function pauseActiveConversation() {
   // 5) SET GLOBAL FLAG
   isViewingHistoricalScene = true;
   
-  // 6) PERSIST PAUSED STATE TO SESSION
+  // 6) ALIGN AUTO-PAUSE WITH MANUAL PAUSE UX
+  // If user did not manually pause, navigation pause should still require explicit Play to continue.
+  if (!manualPauseState?.isPaused) {
+    manualPauseState = {
+      isPaused: true,
+      pausedAt: getSingaporeDateTime(),
+      remainingSeconds: responseSeconds
+    };
+    window.manualPauseState = manualPauseState;
+    console.log('✅ Navigation pause converted to manual-style paused state');
+  }
+
+  // 7) PERSIST PAUSED STATE TO SESSION
   syncGlobalStateToSession();
   
   console.log(`✅ Conversation paused at Round ${currentRound}, Step ${currentStep}`);
