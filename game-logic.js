@@ -244,7 +244,7 @@ function getSingaporeDateTime() {
 function startRound() {
   currentStep = 0;
   isResponseInputActive = false;
-  
+
   // Ensure response input visibility is correct for current scene state
   updateResponseInputAreaVisibility();
   updateResponseTimerVisibility();
@@ -406,7 +406,7 @@ function displayPlayerResponse(turnData) {
   }
 
   isResponseInputActive = true;
-
+  
   let dialogueHTML = turnData.dialogue;
 
   if (turnData.blanks) {
@@ -1726,8 +1726,8 @@ function updateResponseInputAreaVisibility() {
 
   // SHOW ONLY IF: on actual current scene AND not viewing historical scene
   const shouldShow = (gameSession?.currentScene === actualCurrentScene) && 
-                     !isViewingHistoricalScene && 
-                     isResponseInputActive &&
+                     !isViewingHistoricalScene &&
+                     isResponseInputActive && 
                      gameSession?.currentScene !== undefined;
 
   if (shouldShow) {
