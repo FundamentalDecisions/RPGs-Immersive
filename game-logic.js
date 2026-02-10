@@ -1680,6 +1680,9 @@ function resumeActiveConversation() {
   syncGlobalStateToSession();
 
   applyManualPauseUI();
+  if (manualPauseState?.isPaused) {
+    applyManualPauseUI();
+  }
   
   console.log(`✅ Conversation resumed at Round ${currentRound}, Step ${currentStep}`);
   console.log('=== RESUME COMPLETE ===');
@@ -1877,6 +1880,7 @@ function validateGameState() {
     isViewingHistoricalScene ||
     manualPauseState?.isPaused ||
     !isAwaitingPlayerResponse;
+    manualPauseState?.isPaused;
   const actualDisabled = inputArea?.classList.contains('disabled-overlay') ||
     inputArea?.classList.contains('manual-paused') ||
     inputArea?.style.display === 'none';
