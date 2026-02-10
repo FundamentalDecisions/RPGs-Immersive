@@ -1542,8 +1542,14 @@ function resumeManualPause() {
   }
 
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
+    const inputArea = document.getElementById('response-input-area');
+  const isInputUsable = Boolean(inputArea) &&
+    inputArea.style.display !== 'none' &&
+    !inputArea.classList.contains('disabled-overlay');
   const shouldResumeTimer = (gameSession?.currentScene === actualCurrentScene) &&
     !isViewingHistoricalScene &&
+        isAwaitingPlayerResponse &&
+    isInputUsable &&
     typeof remainingSeconds === 'number';
 
   if (shouldResumeTimer) {
