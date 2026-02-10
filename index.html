@@ -196,6 +196,7 @@
         flex-direction: column;
         height: 100%;
         overflow: hidden;
+        position: relative;
       }
 
       .conversation-header {
@@ -1253,6 +1254,13 @@
           style="display: none"
         >
           <div id="current-player-input"></div>
+        </div>
+
+        <div id="manual-pause-overlay" class="manual-pause-overlay hidden">
+          <div class="manual-pause-overlay-card">
+            <div class="manual-pause-overlay-title">⏸ Game Paused</div>
+            <button class="manual-pause-overlay-btn" type="button" onclick="toggleManualPause()">▶ Play</button>
+          </div>
         </div>
       </div>
 

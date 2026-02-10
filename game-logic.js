@@ -993,6 +993,25 @@ function showRoles() {
 }
 
 function showHint() {
+  const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
+  const sceneID = gameSession?.currentScene || actualCurrentScene || 1;
+  const roundPrefix = `B${currentRound}-`;
+  const answerKeyRows = (window.SCENE_DATA?.[sceneID]?.answerKey || window.ANSWER_KEY_DATA || [])
+    .filter((item) =>
+      item &&
+      typeof item.blankUID === 'string' &&
+      item.blankUID.startsWith(roundPrefix) &&
+      typeof item.conceptGroup === 'string' &&
+      item.conceptGroup.trim() !== ''
+    );
+
+  const uniqueConceptGroups = [...new Set(answerKeyRows.map(item => item.conceptGroup.trim()))];
+  const conceptGroupHTML = uniqueConceptGroups.length > 0
+    ? `<ul style="margin:8px 0 0 18px; line-height:1.6;">
+        ${uniqueConceptGroups.map(text => `<li>${text}</li>`).join('')}
+      </ul>`
+    : `<ul style="margin:8px 0 0 18px; line-height:1.6;"><li>No conceptGroup available for this round.</li></ul>`;
+
   document.getElementById('modal-title').textContent = 'Hint';
   document.getElementById(
     'modal-body'
@@ -1005,6 +1024,10 @@ function showHint() {
       <br>
       <strong>Note</strong>: Each speaking round or scene tests a different mindset to varying degrees.
     </p>
+    <div class="modal-text" style="margin-top:10px;">
+      <strong>Scene ${sceneID} Round ${currentRound} conceptGroup</strong>
+      ${conceptGroupHTML}
+    </div>
     `;    
   document.getElementById('modal').classList.remove('hidden');
 }
