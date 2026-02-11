@@ -7,6 +7,7 @@ if (!window.SCENE_DATA) window.SCENE_DATA = {};
 if (!window.SCENE_DATA[1]) window.SCENE_DATA[1] = {};
 window.SCENE_DATA[1].answerKey = [
 
+
   // =====================================================
   // B1-1  (ACTION) – "someone needed to [B1-1]"
   // =====================================================
@@ -1544,3 +1545,7 @@ window.SCENE_DATA[1].answerKey = [
     }
   }
 ];
+
+if (!window.SCENE_DATA_BY_PAIR) window.SCENE_DATA_BY_PAIR = {};
+if (!window.SCENE_DATA_BY_PAIR.chef_vs_owner) window.SCENE_DATA_BY_PAIR.chef_vs_owner = {};
+if (!window.SCENE_DATA_BY_PAIR.chef_vs_owner[1]) window.SCENE_DATA_BY_PAIR.chef_vs_owner[1] = window.SCENE_DATA[1];
