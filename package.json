@@ -5,6 +5,7 @@
   "type": "module",
   "main": "game-v2-exact-design.html",
   "scripts": {
-    "build": "echo 'No build required for static HTML project'"
+    "build": "echo 'No build required for static HTML project'",
+    "validate:pair-template": "node scripts/validate-pair-template.mjs"
   }
 }
