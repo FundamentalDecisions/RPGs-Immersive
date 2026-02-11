@@ -75,8 +75,22 @@ window.sceneConversations = sceneConversations;
 let currentExpandedChapter = null;
 
 // Initialize
-window.onload = function () {
+window.onload = async function () {
   console.log('✅ Game loaded!');
+
+  try {
+    if (typeof ensureEnabledPairsAssetsLoaded === 'function') {
+      await ensureEnabledPairsAssetsLoaded();
+    }
+  } catch (error) {
+    console.error('Failed to preload pair assets:', error);
+    alert('Some game assets failed to load. Please refresh and try again.');
+  }
+
+  if (typeof renderRoleSelectOptions === 'function') {
+    renderRoleSelectOptions();
+  }
+
   document.getElementById('player-info-modal').classList.remove('hidden');
   
   // Initialize state management
@@ -109,7 +123,34 @@ window.sendComment = sendComment;
 window.editBlank = editBlank;
 window.saveBlank = saveBlank;
 
-function startGame() {
+function getDecisionTreeForActivePair() {
+  const pairKey = typeof getActivePairKey === 'function' ? getActivePairKey() : 'chef_vs_owner';
+  if (window.SCENE_DECISIONS_BY_PAIR && window.SCENE_DECISIONS_BY_PAIR[pairKey]) {
+    return window.SCENE_DECISIONS_BY_PAIR[pairKey];
+  }
+  return window.SCENE_DECISIONS;
+}
+
+function getSceneBundleForActivePair(sceneID) {
+  const pairKey = typeof getActivePairKey === 'function' ? getActivePairKey() : 'chef_vs_owner';
+  if (window.SCENE_DATA_BY_PAIR && window.SCENE_DATA_BY_PAIR[pairKey]?.[sceneID]) {
+    return {
+      pairKey,
+      sceneData: window.SCENE_DATA_BY_PAIR[pairKey][sceneID],
+      sceneMeta: window.SCENE_META_BY_PAIR?.[pairKey]?.[sceneID] || window[`SCENE_META_${sceneID}`]
+    };
+  }
+  if (window.SCENE_DATA?.[sceneID]) {
+    return {
+      pairKey: 'chef_vs_owner',
+      sceneData: window.SCENE_DATA[sceneID],
+      sceneMeta: window[`SCENE_META_${sceneID}`]
+    };
+  }
+  return null;
+}
+
+async function startGame() {
   const playerCode = document.getElementById('player-code').value.trim();
   const playerRole = document.getElementById('player-role').value;
   const computerRole = document.getElementById('computer-role').value;
@@ -127,6 +168,30 @@ function startGame() {
     return;
   }
 
+  const pairKey = typeof resolvePairKey === 'function' ? resolvePairKey(playerRole, computerRole) : null;
+  if (!pairKey || !window.PAIR_CONFIG?.[pairKey]) {
+    errorDiv.textContent = 'This role pair is not configured yet.';
+    errorDiv.classList.remove('hidden');
+    return;
+  }
+
+  if (window.PAIR_CONFIG[pairKey].enabled === false) {
+    errorDiv.textContent = 'This role pair exists but scenes are not published yet.';
+    errorDiv.classList.remove('hidden');
+    return;
+  }
+
+  try {
+    if (typeof ensurePairAssetsLoaded === 'function') {
+      await ensurePairAssetsLoaded(pairKey);
+    }
+  } catch (error) {
+    console.error('Failed to load pair assets for startGame:', error);
+    errorDiv.textContent = 'Unable to load selected role-pair assets. Please refresh and retry.';
+    errorDiv.classList.remove('hidden');
+    return;
+  }
+
   // Existing assignments (KEEP)
   sessionData.playerCode = playerCode;
   sessionData.playerRole = playerRole;
@@ -137,6 +202,7 @@ function startGame() {
   const gameSession = {
     playerRole: playerRole,
     computerRole: computerRole,
+    pairKey: pairKey,
     currentScene: 1,
     scoreState: {
       systemsThinker: 0,
@@ -178,10 +244,11 @@ function startGame() {
   document.getElementById('player-info-modal').classList.add('hidden');
   
   // Initialize Scene 1 conversation data
-  if (window.SCENE_DATA && window.SCENE_DATA[1]) {
-    window.CONVERSATION_DATA = window.SCENE_DATA[1].conversation;
-    window.ANSWER_KEY_DATA = window.SCENE_DATA[1].answerKey;
-    window.SCENE_META = window.SCENE_META_1;
+  const sceneOneBundle = getSceneBundleForActivePair(1);
+  if (sceneOneBundle) {
+    window.CONVERSATION_DATA = sceneOneBundle.sceneData.conversation;
+    window.ANSWER_KEY_DATA = sceneOneBundle.sceneData.answerKey;
+    window.SCENE_META = sceneOneBundle.sceneMeta;
 
     // Store Scene 1 metadata in sceneMetaHistory for navigation
     if (!gameSession.sceneMetaHistory) {
@@ -1036,7 +1103,7 @@ function showDecisionCheckpoint(sceneID) {
   try {
     console.log('DEBUG: showDecisionCheckpoint called with sceneID:', sceneID);
     
-    const decisions = window.SCENE_DECISIONS;
+    const decisions = getDecisionTreeForActivePair();
     console.log('DEBUG: Decisions loaded:', decisions);
     
     const scene = decisions[`scene${sceneID}`];
@@ -1081,7 +1148,7 @@ function handleDecision(sceneID, option) {
   // STORE THE DECISION FOR BARRIER
   gameSession.sceneDecisions = gameSession.sceneDecisions || {};
   gameSession.sceneDecisions[sceneID] = {
-    question: window.SCENE_DECISIONS[`scene${sceneID}`].decisionCheckpoint.question,
+    question: getDecisionTreeForActivePair()[`scene${sceneID}`].decisionCheckpoint.question,
     selectedOption: option
   };
   
@@ -1102,7 +1169,7 @@ function loadDecisionCheckpointBarrier(sceneID) {
   try {
     console.log('DEBUG: Loading decision checkpoint barrier for scene:', sceneID);
     
-    const decisions = window.SCENE_DECISIONS;
+    const decisions = getDecisionTreeForActivePair();
     if (!decisions) {
       console.error('SCENE_DECISIONS not loaded');
       return;
