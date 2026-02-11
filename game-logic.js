@@ -1732,19 +1732,10 @@ function updatePausePlayButtonState() {
 
 function applyManualPauseUI() {
   const inputArea = document.getElementById('response-input-area');
-  const banner = document.getElementById('manual-pause-banner');
   const isPaused = manualPauseState?.isPaused;
 
   if (inputArea) {
     inputArea.classList.toggle('manual-paused', Boolean(isPaused));
-  }
-
-  if (banner) {
-    if (isPaused && !isViewingHistoricalScene) {
-      banner.classList.remove('hidden');
-    } else {
-      banner.classList.add('hidden');
-    }
   }
 
   updatePausePlayButtonState();
