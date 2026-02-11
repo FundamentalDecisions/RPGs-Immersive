@@ -62,6 +62,14 @@ let manualPauseState = {
 // True only when the current turn is actively awaiting player input.
 let isResponseInputActive = false;
 
+// Guard async render callbacks so stale timeouts from pre-navigation state
+// cannot append out-of-order/duplicate dialogue blocks.
+let conversationRenderToken = 0;
+
+function bumpConversationRenderToken() {
+  conversationRenderToken += 1;
+  return conversationRenderToken;
+}
 
 window.actualCurrentScene = actualCurrentScene;
 window.isViewingHistoricalScene = isViewingHistoricalScene;
@@ -75,8 +83,22 @@ window.sceneConversations = sceneConversations;
 let currentExpandedChapter = null;
 
 // Initialize
-window.onload = function () {
+window.onload = async function () {
   console.log('✅ Game loaded!');
+
+  try {
+    if (typeof ensureEnabledPairsAssetsLoaded === 'function') {
+      await ensureEnabledPairsAssetsLoaded();
+    }
+  } catch (error) {
+    console.error('Failed to preload pair assets:', error);
+    alert('Some game assets failed to load. Please refresh and try again.');
+  }
+
+  if (typeof renderRoleSelectOptions === 'function') {
+    renderRoleSelectOptions();
+  }
+
   document.getElementById('player-info-modal').classList.remove('hidden');
   
   // Initialize state management
@@ -109,7 +131,34 @@ window.sendComment = sendComment;
 window.editBlank = editBlank;
 window.saveBlank = saveBlank;
 
-function startGame() {
+function getDecisionTreeForActivePair() {
+  const pairKey = typeof getActivePairKey === 'function' ? getActivePairKey() : 'chef_vs_owner';
+  if (window.SCENE_DECISIONS_BY_PAIR && window.SCENE_DECISIONS_BY_PAIR[pairKey]) {
+    return window.SCENE_DECISIONS_BY_PAIR[pairKey];
+  }
+  return window.SCENE_DECISIONS;
+}
+
+function getSceneBundleForActivePair(sceneID) {
+  const pairKey = typeof getActivePairKey === 'function' ? getActivePairKey() : 'chef_vs_owner';
+  if (window.SCENE_DATA_BY_PAIR && window.SCENE_DATA_BY_PAIR[pairKey]?.[sceneID]) {
+    return {
+      pairKey,
+      sceneData: window.SCENE_DATA_BY_PAIR[pairKey][sceneID],
+      sceneMeta: window.SCENE_META_BY_PAIR?.[pairKey]?.[sceneID] || window[`SCENE_META_${sceneID}`]
+    };
+  }
+  if (window.SCENE_DATA?.[sceneID]) {
+    return {
+      pairKey: 'chef_vs_owner',
+      sceneData: window.SCENE_DATA[sceneID],
+      sceneMeta: window[`SCENE_META_${sceneID}`]
+    };
+  }
+  return null;
+}
+
+async function startGame() {
   const playerCode = document.getElementById('player-code').value.trim();
   const playerRole = document.getElementById('player-role').value;
   const computerRole = document.getElementById('computer-role').value;
@@ -127,16 +176,43 @@ function startGame() {
     return;
   }
 
+  const pairKey = typeof resolvePairKey === 'function' ? resolvePairKey(playerRole, computerRole) : null;
+  if (!pairKey || !window.PAIR_CONFIG?.[pairKey]) {
+    errorDiv.textContent = 'This role pair is not configured yet.';
+    errorDiv.classList.remove('hidden');
+    return;
+  }
+
+  if (window.PAIR_CONFIG[pairKey].enabled === false) {
+    errorDiv.textContent = 'This role pair exists but scenes are not published yet.';
+    errorDiv.classList.remove('hidden');
+    return;
+  }
+
+  try {
+    if (typeof ensurePairAssetsLoaded === 'function') {
+      await ensurePairAssetsLoaded(pairKey);
+    }
+  } catch (error) {
+    console.error('Failed to load pair assets for startGame:', error);
+    errorDiv.textContent = 'Unable to load selected role-pair assets. Please refresh and retry.';
+    errorDiv.classList.remove('hidden');
+    return;
+  }
+
   // Existing assignments (KEEP)
   sessionData.playerCode = playerCode;
   sessionData.playerRole = playerRole;
   sessionData.computerRole = computerRole;
   sessionData.startDateTime = getSingaporeDateTime();
+  sessionData.responses = [];
+  sessionData.finalScores = {};
 
   // === GAME SESSION INIT (Non-breaking, CORRECT PLACE) ===
   const gameSession = {
     playerRole: playerRole,
     computerRole: computerRole,
+    pairKey: pairKey,
     currentScene: 1,
     scoreState: {
       systemsThinker: 0,
@@ -148,6 +224,7 @@ function startGame() {
     totalScore: 0,
     sceneHistory: [],
     playerDecisions: {},
+    responses: [],
     // === NEW: INITIALIZE CONVERSATION STATE ===
     actualCurrentScene: 1,
     isViewingHistoricalScene: false,
@@ -178,10 +255,11 @@ function startGame() {
   document.getElementById('player-info-modal').classList.add('hidden');
   
   // Initialize Scene 1 conversation data
-  if (window.SCENE_DATA && window.SCENE_DATA[1]) {
-    window.CONVERSATION_DATA = window.SCENE_DATA[1].conversation;
-    window.ANSWER_KEY_DATA = window.SCENE_DATA[1].answerKey;
-    window.SCENE_META = window.SCENE_META_1;
+  const sceneOneBundle = getSceneBundleForActivePair(1);
+  if (sceneOneBundle) {
+    window.CONVERSATION_DATA = sceneOneBundle.sceneData.conversation;
+    window.ANSWER_KEY_DATA = sceneOneBundle.sceneData.answerKey;
+    window.SCENE_META = sceneOneBundle.sceneMeta;
 
     // Store Scene 1 metadata in sceneMetaHistory for navigation
     if (!gameSession.sceneMetaHistory) {
@@ -189,6 +267,8 @@ function startGame() {
     }
     gameSession.sceneMetaHistory[1] = window.SCENE_META;
     sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
+
+    ensureSceneRenderState(1);
 
   // Add Scene 1 to sceneHistory to track the starting scene in navigation
   gameSession.sceneHistory.push(1);
@@ -253,21 +333,282 @@ function startRound() {
 }
 
 
+
+function normalizeRoleLabel(value) {
+  return (value || '')
+    .replace(/\s*\([^)]*\)\s*/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function isPlayerTurn(turnData) {
+  if (!turnData) return false;
+  if (typeof turnData.is_player === 'boolean') return turnData.is_player;
+
+  const gameSession = JSON.parse(sessionStorage.getItem('gameSession') || '{}');
+  const playerRole = normalizeRoleLabel(gameSession.playerRole || sessionData.playerRole || '');
+  const turnRole = normalizeRoleLabel(turnData.role || '');
+
+  if (playerRole && turnRole) {
+    return playerRole === turnRole;
+  }
+
+  return false;
+}
+
+function getTurnAtState(round, step) {
+  const roundTurns = CONVERSATION_DATA.filter((d) => d.round === round);
+  return roundTurns[step] || null;
+}
+
+function ensureNavigationPauseState() {
+  if (!manualPauseState?.isPaused) {
+    manualPauseState = {
+      isPaused: true,
+      pausedAt: getSingaporeDateTime(),
+      remainingSeconds: responseSeconds
+    };
+    window.manualPauseState = manualPauseState;
+  }
+}
+
+
+function ensureSceneRenderState(sceneID) {
+  const gameSession = JSON.parse(sessionStorage.getItem('gameSession') || '{}');
+  if (!gameSession.sceneRenderState) gameSession.sceneRenderState = {};
+  if (!gameSession.sceneRenderState[sceneID]) {
+    gameSession.sceneRenderState[sceneID] = {
+      completedTurnUIDs: [],
+      draftInputs: {}
+    };
+  }
+  sessionStorage.setItem('gameSession', JSON.stringify(gameSession));
+  return gameSession.sceneRenderState[sceneID];
+}
+
+function markTurnCompleted(sceneID, turnUID) {
+  if (!turnUID) return;
+  const gameSession = JSON.parse(sessionStorage.getItem('gameSession') || '{}');
+  if (!gameSession.sceneRenderState) gameSession.sceneRenderState = {};
+  if (!gameSession.sceneRenderState[sceneID]) {
+    gameSession.sceneRenderState[sceneID] = { completedTurnUIDs: [], draftInputs: {} };
+  }
+
+  const list = gameSession.sceneRenderState[sceneID].completedTurnUIDs;
+  if (!list.includes(turnUID)) {
+    list.push(turnUID);
+  }
+
+  sessionStorage.setItem('gameSession', JSON.stringify(gameSession));
+}
+
+function saveDraftInputsForScene(sceneID) {
+  const gameSession = JSON.parse(sessionStorage.getItem('gameSession') || '{}');
+  if (!gameSession.sceneRenderState) gameSession.sceneRenderState = {};
+  if (!gameSession.sceneRenderState[sceneID]) {
+    gameSession.sceneRenderState[sceneID] = { completedTurnUIDs: [], draftInputs: {} };
+  }
+
+  const draftInputs = {};
+  document.querySelectorAll('#current-player-input .blank-input').forEach((input) => {
+    draftInputs[input.id] = input.value || '';
+  });
+
+  gameSession.sceneRenderState[sceneID].draftInputs = draftInputs;
+  sessionStorage.setItem('gameSession', JSON.stringify(gameSession));
+  return draftInputs;
+}
+
+function findTurnByUID(turnUID) {
+  if (!turnUID) return null;
+  return CONVERSATION_DATA.find((turn) => turn.uid === turnUID) || null;
+}
+
+function getResponseEntryForRound(round, sceneID = null) {
+  const targetSceneID = sceneID ?? JSON.parse(sessionStorage.getItem('gameSession') || '{}')?.currentScene;
+  for (let i = sessionData.responses.length - 1; i >= 0; i -= 1) {
+    const entry = sessionData.responses[i];
+    if (entry.round !== round) continue;
+    if (targetSceneID == null) return entry;
+    if (entry.sceneID === targetSceneID) return entry;
+  }
+
+  // backward compatibility for legacy entries stored before sceneID existed
+  return sessionData.responses.find((entry) => entry.round === round && entry.sceneID === undefined) || null;
+}
+
+function buildPlayerDialogueHTMLFromSavedResponses(turnData) {
+  if (!turnData?.dialogue) return '';
+
+  let dialogueHTML = turnData.dialogue;
+  if (!Array.isArray(turnData.blanks) || turnData.blanks.length === 0) {
+    return dialogueHTML;
+  }
+
+  const currentSceneID = JSON.parse(sessionStorage.getItem('gameSession') || '{}')?.currentScene;
+  const entry = getResponseEntryForRound(turnData.round, currentSceneID);
+  const values = entry?.blanks || {};
+
+  turnData.blanks.forEach((blankUID) => {
+    const value = (values[blankUID] || '').trim() || '...';
+    dialogueHTML = dialogueHTML.replace(
+      `[${blankUID}]`,
+      `<span class="editable-blank" data-uid="${blankUID}" data-round="${turnData.round}">[<strong>${value}</strong>]<span class="edit-icon" onclick="editBlank('${blankUID}', ${turnData.round})">✏️</span></span>`
+    );
+  });
+
+  return dialogueHTML;
+}
+
+function appendStaticTurnToHistory(turnData) {
+  if (!turnData) return;
+  const conversationHistory = document.getElementById('conversation-history');
+  if (!conversationHistory) return;
+
+  if (turnData.narrative && turnData.narrative.trim()) {
+    const narrativeEl = document.createElement('div');
+    narrativeEl.className = 'narrative-box';
+    narrativeEl.textContent = turnData.narrative;
+    conversationHistory.appendChild(narrativeEl);
+  }
+
+  if (turnData.resource || turnData.resource_guideline) {
+    const resourceBlock = createResourceBlock(turnData);
+    if (resourceBlock) conversationHistory.appendChild(resourceBlock);
+  }
+
+  const isPlayer = isPlayerTurn(turnData);
+  const turnClass = isPlayer ? 'dialogue-turn mira' : 'dialogue-turn kenji';
+  const avatar = isPlayer ? '👨‍🍳' : '👨‍💼';
+  const avatarStyle = isPlayer ? ' style="background:#E85D4D;"' : '';
+  const dialogueText = isPlayer
+    ? buildPlayerDialogueHTMLFromSavedResponses(turnData)
+    : (turnData.dialogue || '');
+
+  const dialogueEl = document.createElement('div');
+  dialogueEl.className = turnClass;
+  dialogueEl.innerHTML = `
+    <div class="speaker-info">
+      <div class="speaker-avatar"${avatarStyle}>${avatar}</div>
+      <div>
+        <div class="speaker-name">${turnData.speaker}</div>
+        <div class="speaker-role">${turnData.role}</div>
+      </div>
+    </div>
+    <div class="dialogue-bubble"><div class="dialogue-text">${dialogueText}</div></div>
+  `;
+  conversationHistory.appendChild(dialogueEl);
+}
+
+function rebuildConversationFromState(sceneID) {
+  const gameSession = JSON.parse(sessionStorage.getItem('gameSession') || '{}');
+  const conversationHistory = document.getElementById('conversation-history');
+  if (!conversationHistory) return;
+
+  conversationHistory.innerHTML = '';
+  const completed = gameSession?.sceneRenderState?.[sceneID]?.completedTurnUIDs || [];
+  completed.forEach((uid) => {
+    const turnData = findTurnByUID(uid);
+    appendStaticTurnToHistory(turnData);
+  });
+
+  scrollToBottom();
+}
+
+function restoreDraftInputsForCurrentTurn(sceneID) {
+  const gameSession = JSON.parse(sessionStorage.getItem('gameSession') || '{}');
+  const drafts = gameSession?.sceneRenderState?.[sceneID]?.draftInputs || {};
+  Object.entries(drafts).forEach(([blankUID, value]) => {
+    const input = document.getElementById(blankUID);
+    if (input) input.value = value;
+  });
+}
+
+function rebuildConversationToPosition(sceneID, targetRound, targetStep) {
+  const conversationHistory = document.getElementById('conversation-history');
+  if (!conversationHistory || !Array.isArray(CONVERSATION_DATA)) return;
+
+  conversationHistory.innerHTML = '';
+
+  const rounds = [...new Set(CONVERSATION_DATA.map((turn) => turn.round))].sort((a, b) => a - b);
+  rounds.forEach((roundNumber) => {
+    const roundTurns = CONVERSATION_DATA.filter((turn) => turn.round === roundNumber);
+    if (roundNumber < targetRound) {
+      roundTurns.forEach((turn) => appendStaticTurnToHistory(turn));
+      return;
+    }
+
+    if (roundNumber === targetRound) {
+      for (let i = 0; i < Math.min(targetStep, roundTurns.length); i += 1) {
+        appendStaticTurnToHistory(roundTurns[i]);
+      }
+    }
+  });
+
+  scrollToBottom();
+}
+
+function appendPendingPlayerTurnContext(turnData) {
+  if (!turnData) return;
+
+  const conversationHistory = document.getElementById('conversation-history');
+  if (!conversationHistory) return;
+
+  if (turnData.narrative && turnData.narrative.trim()) {
+    const narrativeEl = document.createElement('div');
+    narrativeEl.className = 'narrative-box';
+    narrativeEl.textContent = turnData.narrative;
+    conversationHistory.appendChild(narrativeEl);
+  }
+
+  if (turnData.resource || turnData.resource_guideline) {
+    const resourceBlock = createResourceBlock(turnData);
+    if (resourceBlock) conversationHistory.appendChild(resourceBlock);
+  }
+
+  scrollToBottom();
+}
+
 function displayCurrentTurn() {
   // Validate CONVERSATION_DATA exists
   if (!CONVERSATION_DATA) {
     console.error('CONVERSATION_DATA is undefined. Scene may not have loaded properly.');
     return;
   }
-  
+
+  const renderToken = conversationRenderToken;
+
   // Get all turns for the current round, then use currentStep as an index
   const roundTurns = CONVERSATION_DATA.filter(d => d.round === currentRound);
   const turnData = roundTurns[currentStep];
 
   if (!turnData) return;
 
-
   const conversationHistory = document.getElementById('conversation-history');
+
+  const continueToDialogue = () => {
+    if (renderToken !== conversationRenderToken) return;
+    isPlayerTurn(turnData)
+      ? displayPlayerResponse(turnData)
+      : displayComputerDialogue(turnData, renderToken);
+  };
+
+  const appendResourceThenContinue = () => {
+    if (renderToken !== conversationRenderToken) return;
+    if (turnData.resource || turnData.resource_guideline) {
+      const resourceBlock = createResourceBlock(turnData);
+      if (resourceBlock) {
+        conversationHistory.appendChild(resourceBlock);
+        scrollToBottom();
+      }
+      setTimeout(() => {
+        if (renderToken !== conversationRenderToken) return;
+        continueToDialogue();
+      }, 400);
+      return;
+    }
+    continueToDialogue();
+  };
 
   if (turnData.narrative && turnData.narrative.trim()) {
     const narrativeEl = document.createElement('div');
@@ -275,41 +616,20 @@ function displayCurrentTurn() {
     conversationHistory.appendChild(narrativeEl);
     typeText(narrativeEl, turnData.narrative, 15);
 
-    // Calculate base delay for narrative completion
     const narrativeDelay = turnData.narrative.length * 15 + 500;
-
-    // Check if resource block should appear after narrative (before dialogue)
-    if (turnData.resource || turnData.resource_guideline) {
-      setTimeout(() => {
-        const resourceBlock = createResourceBlock(turnData);
-        if (resourceBlock) {
-          conversationHistory.appendChild(resourceBlock);
-          scrollToBottom();
-        }
-        // Schedule dialogue/player response after resource block appears
-        setTimeout(() => {
-          turnData.speaker === 'Kenji'
-            ? displayComputerDialogue(turnData)
-            : displayPlayerResponse(turnData);
-        }, 1000);
-      }, narrativeDelay);
-    } else {
-      // No resource block, proceed directly to dialogue/response
-      setTimeout(() => {
-        turnData.speaker === 'Kenji'
-          ? displayComputerDialogue(turnData)
-          : displayPlayerResponse(turnData);
-      }, narrativeDelay);
-    }
-
-  } else {
-    turnData.speaker === 'Kenji'
-      ? displayComputerDialogue(turnData)
-      : displayPlayerResponse(turnData);
+    setTimeout(() => {
+      if (renderToken !== conversationRenderToken) return;
+      appendResourceThenContinue();
+    }, narrativeDelay);
+    return;
   }
+
+  appendResourceThenContinue();
 }
 
-function displayComputerDialogue(turnData) {
+function displayComputerDialogue(turnData, renderToken = conversationRenderToken) {
+  if (renderToken !== conversationRenderToken) return;
+
   const conversationHistory = document.getElementById('conversation-history');
 
   const dialogueEl = document.createElement('div');
@@ -338,27 +658,13 @@ function displayComputerDialogue(turnData) {
   // Calculate base delay for dialogue completion
   const dialogueDelay = turnData.dialogue.length * 20 + 3000;
 
-  // Check if resource block should appear after dialogue (before next turn)
-  if (turnData.resource || turnData.resource_guideline) {
-    setTimeout(() => {
-      const resourceBlock = createResourceBlock(turnData);
-      if (resourceBlock) {
-        conversationHistory.appendChild(resourceBlock);
-        scrollToBottom();
-      }
-      // Schedule next turn after resource block appears
-      setTimeout(() => {
-        currentStep = 1;
-        displayCurrentTurn();
-      }, 1000);
-    }, dialogueDelay);
-  } else {
-    // No resource block, proceed directly to next turn
-    setTimeout(() => {
-      currentStep = 1;
-      displayCurrentTurn();
-    }, dialogueDelay);
-  }
+  setTimeout(() => {
+    if (renderToken !== conversationRenderToken) return;
+    const gs = JSON.parse(sessionStorage.getItem("gameSession") || '{}');
+    markTurnCompleted(gs.currentScene, turnData.uid);
+    currentStep = 1;
+    displayCurrentTurn();
+  }, dialogueDelay);
   
   // Ensure timer is managed correctly after computer dialogue
   manageTimerForSceneState();
@@ -483,13 +789,14 @@ function submitResponse() {
   if (responseTimer) clearInterval(responseTimer);
 
   const currentData = CONVERSATION_DATA.find(
-    (d) => d.round === currentRound && d.speaker === 'Mira'
+    (d) => d.round === currentRound && isPlayerTurn(d)
   );
   if (!currentData || !currentData.blanks) return;
 
 
   const responses = {};
   const responseDetails = {
+    sceneID: gameSession?.currentScene || actualCurrentScene,
     round: currentRound,
     timestamp: getSingaporeDateTime(),
     blanks: {},
@@ -539,14 +846,7 @@ function submitResponse() {
   isResponseInputActive = false;
   scrollToBottom();
 
-  // Check if resource block should appear after player's response
-  if (currentData.resource || currentData.resource_guideline) {
-    const resourceBlock = createResourceBlock(currentData);
-    if (resourceBlock) {
-      conversationHistory.appendChild(resourceBlock);
-      scrollToBottom();
-    }
-  }
+  markTurnCompleted(gameSession?.currentScene || 1, currentData.uid);
 
   sessionData.responses.push(responseDetails);
 
@@ -685,7 +985,8 @@ function saveBlank(blankUID, round) {
   const input = document.getElementById(`edit-${blankUID}-${round}`);
   const newValue = input.value.trim() !== '' ? input.value.trim() : '...';
 
-  const entry = sessionData.responses.find((r) => r.round === round);
+  const currentSceneID = JSON.parse(sessionStorage.getItem('gameSession') || '{}')?.currentScene;
+  const entry = getResponseEntryForRound(round, currentSceneID);
   if (entry) entry.blanks[blankUID] = newValue;
 
   const span = document.querySelector(
@@ -1036,7 +1337,7 @@ function showDecisionCheckpoint(sceneID) {
   try {
     console.log('DEBUG: showDecisionCheckpoint called with sceneID:', sceneID);
     
-    const decisions = window.SCENE_DECISIONS;
+    const decisions = getDecisionTreeForActivePair();
     console.log('DEBUG: Decisions loaded:', decisions);
     
     const scene = decisions[`scene${sceneID}`];
@@ -1081,7 +1382,7 @@ function handleDecision(sceneID, option) {
   // STORE THE DECISION FOR BARRIER
   gameSession.sceneDecisions = gameSession.sceneDecisions || {};
   gameSession.sceneDecisions[sceneID] = {
-    question: window.SCENE_DECISIONS[`scene${sceneID}`].decisionCheckpoint.question,
+    question: getDecisionTreeForActivePair()[`scene${sceneID}`].decisionCheckpoint.question,
     selectedOption: option
   };
   
@@ -1102,7 +1403,7 @@ function loadDecisionCheckpointBarrier(sceneID) {
   try {
     console.log('DEBUG: Loading decision checkpoint barrier for scene:', sceneID);
     
-    const decisions = window.SCENE_DECISIONS;
+    const decisions = getDecisionTreeForActivePair();
     if (!decisions) {
       console.error('SCENE_DECISIONS not loaded');
       return;
@@ -1119,7 +1420,13 @@ function loadDecisionCheckpointBarrier(sceneID) {
     const playerDecision = gameSession?.playerDecisions?.[`scene${sceneID}`];
 
     if (!playerDecision) {
-      console.log(`No decision made for scene ${sceneID} yet`);
+      const isHistorical = sceneID !== actualCurrentScene;
+      const message = `No decision made for scene ${sceneID} yet`;
+      if (isHistorical) {
+        console.error(`Invariant violation: ${message}`);
+      } else {
+        console.log(message);
+      }
       return;
     }
 
@@ -1139,8 +1446,11 @@ function loadDecisionCheckpointBarrier(sceneID) {
     const barrierHTML = `
       <div id="checkpoint-barrier-overlay" style="margin: 30px 0 0 0; padding: 15px; background: #f9f9f9; border-left: 4px solid #8ba89c; border-radius: 4px;">
         <div style="font-size: 12px; color: #999; margin-bottom: 8px;">Scene ${sceneID} - Decision Checkpoint</div>
+        <div style="font-size: 13px; color: #2c3e3c; margin-bottom: 6px;">
+          <strong>Question:</strong> ${scene.decisionCheckpoint.question}
+        </div>
         <div style="font-size: 14px; color: #2c3e3c; font-weight: 500;">
-          ${selectedOption.optionLabel}: ${selectedOption.optionText}
+          <strong>Selected:</strong> ${selectedOption.optionLabel}: ${selectedOption.optionText}
         </div>
       </div>
     `;
@@ -1214,6 +1524,7 @@ function loadSceneConversation(sceneID) {
   const conversationHistory = document.getElementById('conversation-history');
   
   if (gameSession.conversationHistory && Object.prototype.hasOwnProperty.call(gameSession.conversationHistory, sceneID)) {
+    ensureSceneRenderState(sceneID);
     conversationHistory.innerHTML = gameSession.conversationHistory[sceneID] || '';
     
     // AFTER LOADING CONVERSATION, CHECK IF DECISION CHECKPOINT BARRIER SHOULD BE SHOWN
@@ -1279,6 +1590,7 @@ function navigatePreviousScene() {
 
   // STEP 2: SAVE CURRENT SCENE CONVERSATION
   saveCurrentSceneConversation();
+  bumpConversationRenderToken();
 
   // STEP 3: LOAD PREVIOUS SCENE CONVERSATION
   const loaded = loadSceneConversation(previousScene);
@@ -1292,10 +1604,9 @@ function navigatePreviousScene() {
   isViewingHistoricalScene = (previousScene !== actualCurrentScene);
   console.log(`isViewingHistoricalScene set to: ${isViewingHistoricalScene}`);
 
-  // STEP 5: SHOW/HIDE HISTORICAL BANNER AND DISABLE INPUT
+  // STEP 5: DISABLE INPUT FOR HISTORICAL VIEW (NO HISTORICAL BANNER)
   if (isViewingHistoricalScene) {
-    setTimeout(() => showHistoricalViewBanner(), 100);
-    // Disable response input area
+    hideHistoricalViewBanner();
     const inputArea = document.getElementById('response-input-area');
     if (inputArea) {
       inputArea.style.display = 'none';
@@ -1386,6 +1697,7 @@ function navigateNextScene() {
 
   // STEP 2: SAVE CURRENT SCENE CONVERSATION
   saveCurrentSceneConversation();
+  bumpConversationRenderToken();
 
   // STEP 3: LOAD NEXT SCENE CONVERSATION
   const loaded = loadSceneConversation(nextScene);
@@ -1397,29 +1709,56 @@ function navigateNextScene() {
 
   // STEP 4: DETERMINE IF RETURNING TO ACTUAL CURRENT SCENE
   if (nextScene === actualCurrentScene) {
-    console.log('Returning to actual current scene, resuming conversation');
+    console.log('Returning to actual current scene in paused mode, waiting for Play');
     isViewingHistoricalScene = false;
     actualCurrentScene = nextScene;
     window.actualCurrentScene = actualCurrentScene;
-    // Sync session state before resume validation/auto-fix logic runs
+
     gameSession.currentScene = nextScene;
     gameSession.currentSceneHistoryIndex = nextSceneIndex;
     gameSession.isViewingHistoricalScene = false;
-    sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
 
-    resumeActiveConversation();
+    ensureNavigationPauseState();
     hideHistoricalViewBanner();
+
+    const pausedState = gameSession.pausedConversationState || pausedConversationState;
+    if (pausedState) {
+      currentRound = pausedState.currentRound;
+      currentStep = pausedState.currentStep;
+      responseSeconds = pausedState.responseSeconds;
+      const activeTurn = getTurnAtState(currentRound, currentStep);
+      isResponseInputActive = isPlayerTurn(activeTurn);
+    }
+
+    sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
+    syncSessionStateToGlobal();
+
+    rebuildConversationToPosition(nextScene, currentRound, currentStep);
+
+    const activeTurn = getTurnAtState(currentRound, currentStep);
+    if (activeTurn && isPlayerTurn(activeTurn)) {
+      appendPendingPlayerTurnContext(activeTurn);
+      displayPlayerResponse(activeTurn);
+      restoreDraftInputsForCurrentTurn(nextScene);
+      updateResponseInputAreaVisibility();
+    } else {
+      const inputRoot = document.getElementById('current-player-input');
+      if (inputRoot) inputRoot.innerHTML = '';
+      updateResponseInputAreaVisibility();
+    }
+
     applyManualPauseUI();
   } else {
     console.log('Navigating to another historical scene');
     isViewingHistoricalScene = true;
-    // Disable response input area
+    hideHistoricalViewBanner();
+
     const inputArea = document.getElementById('response-input-area');
     if (inputArea) {
       inputArea.style.display = 'none';
       inputArea.classList.add('disabled-overlay');
     }
-    setTimeout(() => showHistoricalViewBanner(), 100);
+
     applyManualPauseUI();
   }
 
@@ -1472,18 +1811,22 @@ function updatePausePlayButtonState() {
 
 function applyManualPauseUI() {
   const inputArea = document.getElementById('response-input-area');
-  const banner = document.getElementById('manual-pause-banner');
+  const gameSession = JSON.parse(sessionStorage.getItem("gameSession") || '{}');
   const isPaused = manualPauseState?.isPaused;
+  const shouldShowPauseOverlay = Boolean(
+    isPaused &&
+    gameSession?.currentScene === actualCurrentScene &&
+    !isViewingHistoricalScene
+  );
 
   if (inputArea) {
     inputArea.classList.toggle('manual-paused', Boolean(isPaused));
-  }
 
-  if (banner) {
-    if (isPaused && !isViewingHistoricalScene) {
-      banner.classList.remove('hidden');
-    } else {
-      banner.classList.add('hidden');
+    if (shouldShowPauseOverlay) {
+      inputArea.style.display = 'block';
+      inputArea.classList.add('disabled-overlay');
+    } else if (!isResponseInputActive) {
+      inputArea.classList.remove('disabled-overlay');
     }
   }
 
@@ -1527,9 +1870,15 @@ function resumeManualPause() {
 
   window.manualPauseState = manualPauseState;
 
+  const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
+
+  if (gameSession?.pausedConversationState) {
+    resumeActiveConversation();
+    return;
+  }
+
   applyManualPauseUI();
 
-  const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   const shouldResumeTimer = (gameSession?.currentScene === actualCurrentScene) &&
     !isViewingHistoricalScene &&
     isResponseInputActive &&
@@ -1581,23 +1930,25 @@ function pauseActiveConversation() {
   // 4) PRESERVE CURRENT PLAYER INPUT CONTENT
   // Keep any in-progress typed draft when navigating away so returning + Play can resume
   // the same waiting-for-player state instead of silently auto-submitting empty blanks.
-
-  // 5) SET GLOBAL FLAG
-  isViewingHistoricalScene = true;
-  
-  // 6) ALIGN AUTO-PAUSE WITH MANUAL PAUSE UX
-  // If user did not manually pause, navigation pause should still require explicit Play to continue.
-  if (!manualPauseState?.isPaused) {
-    manualPauseState = {
-      isPaused: true,
-      pausedAt: getSingaporeDateTime(),
-      remainingSeconds: responseSeconds
-    };
-    window.manualPauseState = manualPauseState;
-    console.log('✅ Navigation pause converted to manual-style paused state');
+  const currentSession = JSON.parse(sessionStorage.getItem("gameSession") || '{}');
+  if (currentSession?.currentScene !== undefined) {
+    const draftInputs = saveDraftInputsForScene(currentSession.currentScene);
+    if (pausedConversationState) {
+      pausedConversationState.draftInputs = draftInputs;
+    }
   }
 
+  // 5) KEEP TURN OWNERSHIP STATE FOR RESUME
+  const activeTurn = getTurnAtState(currentRound, currentStep);
+  isResponseInputActive = isPlayerTurn(activeTurn);
+
+  // 6) ALIGN AUTO-PAUSE WITH MANUAL PAUSE UX
+  // Navigation pause always requires explicit Play to continue.
+  ensureNavigationPauseState();
+  console.log('✅ Navigation pause converted to manual-style paused state');
+
   // 7) PERSIST PAUSED STATE TO SESSION
+  bumpConversationRenderToken();
   syncGlobalStateToSession();
   
   console.log(`✅ Conversation paused at Round ${currentRound}, Step ${currentStep}`);
@@ -1611,54 +1962,53 @@ function resumeActiveConversation() {
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   let state = null;
 
-  // 1) RESTORE PAUSED CONVERSATION STATE
   if (gameSession && gameSession.pausedConversationState) {
     state = gameSession.pausedConversationState;
     currentRound = state.currentRound;
     currentStep = state.currentStep;
     responseSeconds = state.responseSeconds;
-    const roundTurns = CONVERSATION_DATA.filter(d => d.round === currentRound);
-    const activeTurn = roundTurns[currentStep];
-    isResponseInputActive = Boolean(activeTurn?.speaker !== 'Kenji');
+
+    const activeTurn = getTurnAtState(currentRound, currentStep);
+    isResponseInputActive = isPlayerTurn(activeTurn);
     console.log(`✅ Restored Round ${currentRound}, Step ${currentStep}`);
   }
 
-  // 2) CLEAR PAUSED STATE
   pausedConversationState = null;
   console.log('✅ Paused state cleared');
 
-  // 3) RESET HISTORICAL FLAG
   isViewingHistoricalScene = false;
   console.log('✅ Historical view flag reset');
 
-  // 4) SHOW/HIDE RESPONSE INPUT AREA ACCORDING TO CURRENT TURN
-  updateResponseInputAreaVisibility();
-  console.log('✅ Response input area visibility refreshed');
+  const activeTurn = getTurnAtState(currentRound, currentStep);
+  const activePlayerTurn = isPlayerTurn(activeTurn);
+  isResponseInputActive = activePlayerTurn;
 
+  // Continue pipeline for computer turns; keep player turns waiting for input.
+  if (activeTurn && !activePlayerTurn) {
+    console.log('⏯ Resuming from computer turn, continuing pipeline');
+    bumpConversationRenderToken();
+    displayCurrentTurn();
+  } else {
+    updateResponseInputAreaVisibility();
+    console.log('✅ Response input area visibility refreshed');
+  }
 
-  // 6) RESTART TIMER IF NEEDED
-  if (state && state.isTimerActive && !manualPauseState?.isPaused) {
+  if (state && state.isTimerActive && !manualPauseState?.isPaused && activePlayerTurn) {
     startResponseTimer(state.responseSeconds);
     console.log('✅ Timer restarted');
   }
 
-  // 7) SYNC STATE TO SESSION
   syncGlobalStateToSession();
+  applyManualPauseUI();
 
-  if (manualPauseState?.isPaused) {
-    applyManualPauseUI();
-  }  
-  
   console.log(`✅ Conversation resumed at Round ${currentRound}, Step ${currentStep}`);
   console.log('=== RESUME COMPLETE ===');
 
-  // Auto-validate and fix any state inconsistencies
   const validation = validateGameState();
   if (validation.warnings.length > 0) {
     console.warn('State warnings after resume:', validation.warnings);
     autoFixGameState();
   }
-
 }
 
 
@@ -1668,19 +2018,13 @@ function isOnActualCurrentScene() {
 }
 
 function showHistoricalViewBanner() {
+  // Historical banner is deprecated for navigation flow. Keep hidden.
   const banner = document.getElementById('historical-view-banner');
-  const inputArea = document.getElementById('response-input-area');
-  
   if (banner) {
-    banner.classList.remove('hidden');
+    banner.classList.add('hidden');
   }
-  
-  if (inputArea) {
-    inputArea.classList.add('disabled-overlay');
-  }
-  
   updatePausePlayButtonState();
-  console.log('Historical view banner shown');
+  console.log('Historical view banner suppressed (deprecated)');
 }
 
 function hideHistoricalViewBanner() {
@@ -1812,6 +2156,56 @@ function manageTimerForSceneState() {
 
 // === NEW: COMPREHENSIVE STATE VALIDATION ===
 
+
+function enforceSceneProgressionInvariant(gameSession) {
+  if (!gameSession || !Array.isArray(gameSession.sceneHistory) || gameSession.sceneHistory.length === 0) {
+    return { corrected: false, notes: [] };
+  }
+
+  const notes = [];
+  let corrected = false;
+  const lastHistoricalScene = gameSession.sceneHistory[gameSession.sceneHistory.length - 1];
+
+  if (gameSession.actualCurrentScene !== lastHistoricalScene) {
+    notes.push(`actualCurrentScene corrected ${gameSession.actualCurrentScene} -> ${lastHistoricalScene}`);
+    gameSession.actualCurrentScene = lastHistoricalScene;
+    actualCurrentScene = lastHistoricalScene;
+    window.actualCurrentScene = actualCurrentScene;
+    corrected = true;
+  }
+
+  if (gameSession.currentScene === gameSession.actualCurrentScene) {
+    if (gameSession.isViewingHistoricalScene) {
+      gameSession.isViewingHistoricalScene = false;
+      isViewingHistoricalScene = false;
+      window.isViewingHistoricalScene = false;
+      notes.push('isViewingHistoricalScene reset to false on active scene');
+      corrected = true;
+    }
+  } else if (!gameSession.isViewingHistoricalScene) {
+    gameSession.isViewingHistoricalScene = true;
+    isViewingHistoricalScene = true;
+    window.isViewingHistoricalScene = true;
+    notes.push('isViewingHistoricalScene corrected to true on historical scene');
+    corrected = true;
+  }
+
+  const decisions = getDecisionTreeForActivePair() || {};
+  const sceneDecisions = gameSession.playerDecisions || {};
+  const historicalScenes = gameSession.sceneHistory.slice(0, -1);
+  historicalScenes.forEach((sceneID) => {
+    if (decisions[`scene${sceneID}`] && !sceneDecisions[`scene${sceneID}`]) {
+      notes.push(`missing decision for historical scene ${sceneID}`);
+    }
+  });
+
+  if (corrected) {
+    sessionStorage.setItem('gameSession', JSON.stringify(gameSession));
+  }
+
+  return { corrected, notes };
+}
+
 function validateGameState() {
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   const errors = [];
@@ -1860,7 +2254,23 @@ function validateGameState() {
     warnings.push(`Timer state mismatch: Timer active=${timerActive}, Should be active=${shouldBeActive}`);
   }
 
-  // VALIDATION 7: Check if pausedConversationState is set when needed
+  // VALIDATION 7: actualCurrentScene should always be the last scene in history
+  if (Array.isArray(gameSession?.sceneHistory) && gameSession.sceneHistory.length > 0) {
+    const lastScene = gameSession.sceneHistory[gameSession.sceneHistory.length - 1];
+    if (actualCurrentScene !== lastScene) {
+      warnings.push(`actualCurrentScene (${actualCurrentScene}) should equal last sceneHistory entry (${lastScene})`);
+    }
+
+    const decisions = getDecisionTreeForActivePair() || {};
+    const historicalScenes = gameSession.sceneHistory.slice(0, -1);
+    historicalScenes.forEach((sceneID) => {
+      if (decisions[`scene${sceneID}`] && !gameSession?.playerDecisions?.[`scene${sceneID}`]) {
+        errors.push(`Historical scene ${sceneID} is missing saved decision`);
+      }
+    });
+  }
+
+  // VALIDATION 8: Check if pausedConversationState is set when needed
   if (gameSession?.currentScene !== actualCurrentScene && isViewingHistoricalScene && !pausedConversationState) {
     warnings.push('On inactive scene but no pausedConversationState stored');
   }
@@ -1889,6 +2299,11 @@ function autoFixGameState() {
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   let fixesApplied = [];
 
+  const invariantResult = enforceSceneProgressionInvariant(gameSession);
+  if (invariantResult.corrected) {
+    fixesApplied.push(...invariantResult.notes);
+  }
+
   // FIX 1: Sync actualCurrentScene
   if (actualCurrentScene !== gameSession?.actualCurrentScene) {
     console.log(`Fixing: actualCurrentScene ${actualCurrentScene} → ${gameSession?.actualCurrentScene}`);
@@ -1915,8 +2330,8 @@ function autoFixGameState() {
 
   // FIX 5: Update banner visibility
   if (isViewingHistoricalScene) {
-    showHistoricalViewBanner();
-    fixesApplied.push('Historical view banner shown');
+    hideHistoricalViewBanner();
+    fixesApplied.push('Historical view banner suppressed');
   } else {
     hideHistoricalViewBanner();
     fixesApplied.push('Historical view banner hidden');
@@ -1977,6 +2392,7 @@ function syncGlobalStateToSession() {
     gameSession.isViewingHistoricalScene = isViewingHistoricalScene;
     gameSession.pausedConversationState = pausedConversationState;
     gameSession.manualPauseState = manualPauseState;
+    gameSession.responses = sessionData.responses;
     sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
   }
 }
@@ -1985,13 +2401,17 @@ function syncSessionStateToGlobal() {
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   if (gameSession) {
     actualCurrentScene = gameSession.actualCurrentScene || actualCurrentScene;
-    isViewingHistoricalScene = gameSession.isViewingHistoricalScene || false;
+    isViewingHistoricalScene = Boolean(gameSession.isViewingHistoricalScene);
     pausedConversationState = gameSession.pausedConversationState || null;
     manualPauseState = gameSession.manualPauseState || {
       isPaused: false,
       pausedAt: null,
       remainingSeconds: null
     };
+
+    if (Array.isArray(gameSession.responses)) {
+      sessionData.responses = gameSession.responses;
+    }
 
     window.actualCurrentScene = actualCurrentScene;
     window.isViewingHistoricalScene = isViewingHistoricalScene;
