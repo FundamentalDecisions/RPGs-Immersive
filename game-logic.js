@@ -62,6 +62,14 @@ let manualPauseState = {
 // True only when the current turn is actively awaiting player input.
 let isResponseInputActive = false;
 
+// Guard async render callbacks so stale timeouts from pre-navigation state
+// cannot append out-of-order/duplicate dialogue blocks.
+let conversationRenderToken = 0;
+
+function bumpConversationRenderToken() {
+  conversationRenderToken += 1;
+  return conversationRenderToken;
+}
 
 window.actualCurrentScene = actualCurrentScene;
 window.isViewingHistoricalScene = isViewingHistoricalScene;
@@ -413,6 +421,32 @@ function findTurnByUID(turnUID) {
   return CONVERSATION_DATA.find((turn) => turn.uid === turnUID) || null;
 }
 
+function getResponseEntryForRound(round) {
+  return sessionData.responses.find((entry) => entry.round === round) || null;
+}
+
+function buildPlayerDialogueHTMLFromSavedResponses(turnData) {
+  if (!turnData?.dialogue) return '';
+
+  let dialogueHTML = turnData.dialogue;
+  if (!Array.isArray(turnData.blanks) || turnData.blanks.length === 0) {
+    return dialogueHTML;
+  }
+
+  const entry = getResponseEntryForRound(turnData.round);
+  const values = entry?.blanks || {};
+
+  turnData.blanks.forEach((blankUID) => {
+    const value = (values[blankUID] || '').trim() || '...';
+    dialogueHTML = dialogueHTML.replace(
+      `[${blankUID}]`,
+      `<span class="editable-blank" data-uid="${blankUID}" data-round="${turnData.round}">[<strong>${value}</strong>]<span class="edit-icon" onclick="editBlank('${blankUID}', ${turnData.round})">✏️</span></span>`
+    );
+  });
+
+  return dialogueHTML;
+}
+
 function appendStaticTurnToHistory(turnData) {
   if (!turnData) return;
   const conversationHistory = document.getElementById('conversation-history');
@@ -425,10 +459,18 @@ function appendStaticTurnToHistory(turnData) {
     conversationHistory.appendChild(narrativeEl);
   }
 
+  if (turnData.resource || turnData.resource_guideline) {
+    const resourceBlock = createResourceBlock(turnData);
+    if (resourceBlock) conversationHistory.appendChild(resourceBlock);
+  }
+
   const isPlayer = isPlayerTurn(turnData);
   const turnClass = isPlayer ? 'dialogue-turn mira' : 'dialogue-turn kenji';
   const avatar = isPlayer ? '👨‍🍳' : '👨‍💼';
   const avatarStyle = isPlayer ? ' style="background:#E85D4D;"' : '';
+  const dialogueText = isPlayer
+    ? buildPlayerDialogueHTMLFromSavedResponses(turnData)
+    : (turnData.dialogue || '');
 
   const dialogueEl = document.createElement('div');
   dialogueEl.className = turnClass;
@@ -440,14 +482,9 @@ function appendStaticTurnToHistory(turnData) {
         <div class="speaker-role">${turnData.role}</div>
       </div>
     </div>
-    <div class="dialogue-bubble"><div class="dialogue-text">${turnData.dialogue || ''}</div></div>
+    <div class="dialogue-bubble"><div class="dialogue-text">${dialogueText}</div></div>
   `;
   conversationHistory.appendChild(dialogueEl);
-
-  if (turnData.resource || turnData.resource_guideline) {
-    const resourceBlock = createResourceBlock(turnData);
-    if (resourceBlock) conversationHistory.appendChild(resourceBlock);
-  }
 }
 
 function rebuildConversationFromState(sceneID) {
@@ -525,15 +562,40 @@ function displayCurrentTurn() {
     console.error('CONVERSATION_DATA is undefined. Scene may not have loaded properly.');
     return;
   }
-  
+
+  const renderToken = conversationRenderToken;
+
   // Get all turns for the current round, then use currentStep as an index
   const roundTurns = CONVERSATION_DATA.filter(d => d.round === currentRound);
   const turnData = roundTurns[currentStep];
 
   if (!turnData) return;
 
-
   const conversationHistory = document.getElementById('conversation-history');
+
+  const continueToDialogue = () => {
+    if (renderToken !== conversationRenderToken) return;
+    isPlayerTurn(turnData)
+      ? displayPlayerResponse(turnData)
+      : displayComputerDialogue(turnData, renderToken);
+  };
+
+  const appendResourceThenContinue = () => {
+    if (renderToken !== conversationRenderToken) return;
+    if (turnData.resource || turnData.resource_guideline) {
+      const resourceBlock = createResourceBlock(turnData);
+      if (resourceBlock) {
+        conversationHistory.appendChild(resourceBlock);
+        scrollToBottom();
+      }
+      setTimeout(() => {
+        if (renderToken !== conversationRenderToken) return;
+        continueToDialogue();
+      }, 400);
+      return;
+    }
+    continueToDialogue();
+  };
 
   if (turnData.narrative && turnData.narrative.trim()) {
     const narrativeEl = document.createElement('div');
@@ -541,41 +603,20 @@ function displayCurrentTurn() {
     conversationHistory.appendChild(narrativeEl);
     typeText(narrativeEl, turnData.narrative, 15);
 
-    // Calculate base delay for narrative completion
     const narrativeDelay = turnData.narrative.length * 15 + 500;
-
-    // Check if resource block should appear after narrative (before dialogue)
-    if (turnData.resource || turnData.resource_guideline) {
-      setTimeout(() => {
-        const resourceBlock = createResourceBlock(turnData);
-        if (resourceBlock) {
-          conversationHistory.appendChild(resourceBlock);
-          scrollToBottom();
-        }
-        // Schedule dialogue/player response after resource block appears
-        setTimeout(() => {
-          isPlayerTurn(turnData)
-            ? displayPlayerResponse(turnData)
-            : displayComputerDialogue(turnData);
-        }, 1000);
-      }, narrativeDelay);
-    } else {
-      // No resource block, proceed directly to dialogue/response
-      setTimeout(() => {
-          isPlayerTurn(turnData)
-            ? displayPlayerResponse(turnData)
-            : displayComputerDialogue(turnData);
-      }, narrativeDelay);
-    }
-
-  } else {
-          isPlayerTurn(turnData)
-            ? displayPlayerResponse(turnData)
-            : displayComputerDialogue(turnData);
+    setTimeout(() => {
+      if (renderToken !== conversationRenderToken) return;
+      appendResourceThenContinue();
+    }, narrativeDelay);
+    return;
   }
+
+  appendResourceThenContinue();
 }
 
-function displayComputerDialogue(turnData) {
+function displayComputerDialogue(turnData, renderToken = conversationRenderToken) {
+  if (renderToken !== conversationRenderToken) return;
+
   const conversationHistory = document.getElementById('conversation-history');
 
   const dialogueEl = document.createElement('div');
@@ -604,31 +645,13 @@ function displayComputerDialogue(turnData) {
   // Calculate base delay for dialogue completion
   const dialogueDelay = turnData.dialogue.length * 20 + 3000;
 
-  // Check if resource block should appear after dialogue (before next turn)
-  if (turnData.resource || turnData.resource_guideline) {
-    setTimeout(() => {
-      const resourceBlock = createResourceBlock(turnData);
-      if (resourceBlock) {
-        conversationHistory.appendChild(resourceBlock);
-        scrollToBottom();
-      }
-      // Schedule next turn after resource block appears
-      setTimeout(() => {
-        const gs = JSON.parse(sessionStorage.getItem("gameSession") || '{}');
-        markTurnCompleted(gs.currentScene, turnData.uid);
-        currentStep = 1;
-        displayCurrentTurn();
-      }, 1000);
-    }, dialogueDelay);
-  } else {
-    // No resource block, proceed directly to next turn
-    setTimeout(() => {
-      const gs = JSON.parse(sessionStorage.getItem("gameSession") || '{}');
-      markTurnCompleted(gs.currentScene, turnData.uid);
-      currentStep = 1;
-      displayCurrentTurn();
-    }, dialogueDelay);
-  }
+  setTimeout(() => {
+    if (renderToken !== conversationRenderToken) return;
+    const gs = JSON.parse(sessionStorage.getItem("gameSession") || '{}');
+    markTurnCompleted(gs.currentScene, turnData.uid);
+    currentStep = 1;
+    displayCurrentTurn();
+  }, dialogueDelay);
   
   // Ensure timer is managed correctly after computer dialogue
   manageTimerForSceneState();
@@ -809,14 +832,7 @@ function submitResponse() {
   isResponseInputActive = false;
   scrollToBottom();
 
-  // Check if resource block should appear after player's response
-  if (currentData.resource || currentData.resource_guideline) {
-    const resourceBlock = createResourceBlock(currentData);
-    if (resourceBlock) {
-      conversationHistory.appendChild(resourceBlock);
-      scrollToBottom();
-    }
-  }
+  markTurnCompleted(gameSession?.currentScene || 1, currentData.uid);
 
   markTurnCompleted(gameSession?.currentScene || 1, currentData.uid);
 
@@ -1561,6 +1577,7 @@ function navigatePreviousScene() {
 
   // STEP 2: SAVE CURRENT SCENE CONVERSATION
   saveCurrentSceneConversation();
+  bumpConversationRenderToken();
 
   // STEP 3: LOAD PREVIOUS SCENE CONVERSATION
   const loaded = loadSceneConversation(previousScene);
@@ -1667,6 +1684,7 @@ function navigateNextScene() {
 
   // STEP 2: SAVE CURRENT SCENE CONVERSATION
   saveCurrentSceneConversation();
+  bumpConversationRenderToken();
 
   // STEP 3: LOAD NEXT SCENE CONVERSATION
   const loaded = loadSceneConversation(nextScene);
@@ -1917,6 +1935,7 @@ function pauseActiveConversation() {
   console.log('✅ Navigation pause converted to manual-style paused state');
 
   // 7) PERSIST PAUSED STATE TO SESSION
+  bumpConversationRenderToken();
   syncGlobalStateToSession();
   
   console.log(`✅ Conversation paused at Round ${currentRound}, Step ${currentStep}`);
@@ -1954,6 +1973,7 @@ function resumeActiveConversation() {
   // Continue pipeline for computer turns; keep player turns waiting for input.
   if (activeTurn && !activePlayerTurn) {
     console.log('⏯ Resuming from computer turn, continuing pipeline');
+    bumpConversationRenderToken();
     displayCurrentTurn();
   } else {
     updateResponseInputAreaVisibility();
