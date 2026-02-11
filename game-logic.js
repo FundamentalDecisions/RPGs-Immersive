@@ -205,6 +205,8 @@ async function startGame() {
   sessionData.playerRole = playerRole;
   sessionData.computerRole = computerRole;
   sessionData.startDateTime = getSingaporeDateTime();
+  sessionData.responses = [];
+  sessionData.finalScores = {};
 
   // === GAME SESSION INIT (Non-breaking, CORRECT PLACE) ===
   const gameSession = {
@@ -222,6 +224,7 @@ async function startGame() {
     totalScore: 0,
     sceneHistory: [],
     playerDecisions: {},
+    responses: [],
     // === NEW: INITIALIZE CONVERSATION STATE ===
     actualCurrentScene: 1,
     isViewingHistoricalScene: false,
@@ -421,8 +424,17 @@ function findTurnByUID(turnUID) {
   return CONVERSATION_DATA.find((turn) => turn.uid === turnUID) || null;
 }
 
-function getResponseEntryForRound(round) {
-  return sessionData.responses.find((entry) => entry.round === round) || null;
+function getResponseEntryForRound(round, sceneID = null) {
+  const targetSceneID = sceneID ?? JSON.parse(sessionStorage.getItem('gameSession') || '{}')?.currentScene;
+  for (let i = sessionData.responses.length - 1; i >= 0; i -= 1) {
+    const entry = sessionData.responses[i];
+    if (entry.round !== round) continue;
+    if (targetSceneID == null) return entry;
+    if (entry.sceneID === targetSceneID) return entry;
+  }
+
+  // backward compatibility for legacy entries stored before sceneID existed
+  return sessionData.responses.find((entry) => entry.round === round && entry.sceneID === undefined) || null;
 }
 
 function buildPlayerDialogueHTMLFromSavedResponses(turnData) {
@@ -433,7 +445,8 @@ function buildPlayerDialogueHTMLFromSavedResponses(turnData) {
     return dialogueHTML;
   }
 
-  const entry = getResponseEntryForRound(turnData.round);
+  const currentSceneID = JSON.parse(sessionStorage.getItem('gameSession') || '{}')?.currentScene;
+  const entry = getResponseEntryForRound(turnData.round, currentSceneID);
   const values = entry?.blanks || {};
 
   turnData.blanks.forEach((blankUID) => {
@@ -783,6 +796,7 @@ function submitResponse() {
 
   const responses = {};
   const responseDetails = {
+    sceneID: gameSession?.currentScene || actualCurrentScene,
     round: currentRound,
     timestamp: getSingaporeDateTime(),
     blanks: {},
@@ -831,8 +845,6 @@ function submitResponse() {
   document.getElementById('response-input-area').style.display = 'none';
   isResponseInputActive = false;
   scrollToBottom();
-
-  markTurnCompleted(gameSession?.currentScene || 1, currentData.uid);
 
   markTurnCompleted(gameSession?.currentScene || 1, currentData.uid);
 
@@ -973,7 +985,8 @@ function saveBlank(blankUID, round) {
   const input = document.getElementById(`edit-${blankUID}-${round}`);
   const newValue = input.value.trim() !== '' ? input.value.trim() : '...';
 
-  const entry = sessionData.responses.find((r) => r.round === round);
+  const currentSceneID = JSON.parse(sessionStorage.getItem('gameSession') || '{}')?.currentScene;
+  const entry = getResponseEntryForRound(round, currentSceneID);
   if (entry) entry.blanks[blankUID] = newValue;
 
   const span = document.querySelector(
@@ -2379,6 +2392,7 @@ function syncGlobalStateToSession() {
     gameSession.isViewingHistoricalScene = isViewingHistoricalScene;
     gameSession.pausedConversationState = pausedConversationState;
     gameSession.manualPauseState = manualPauseState;
+    gameSession.responses = sessionData.responses;
     sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
   }
 }
@@ -2394,6 +2408,10 @@ function syncSessionStateToGlobal() {
       pausedAt: null,
       remainingSeconds: null
     };
+
+    if (Array.isArray(gameSession.responses)) {
+      sessionData.responses = gameSession.responses;
+    }
 
     window.actualCurrentScene = actualCurrentScene;
     window.isViewingHistoricalScene = isViewingHistoricalScene;
