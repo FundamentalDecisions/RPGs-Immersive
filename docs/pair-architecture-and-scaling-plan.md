@@ -8,7 +8,7 @@
 4. Pair-aware scene bootstrap loads Scene 1 from `SCENE_DATA_BY_PAIR[pairKey][1]` (with backward fallback).
 5. Each round renders narrative/resource/dialogue from `CONVERSATION_DATA`.
 6. Player fills blanks, submits response, and scoring maps keywords to mindset scores from `ANSWER_KEY_DATA`.
-7. At scene end round (`SCENE_END_ROUNDS`), the app opens a decision checkpoint.
+7. At scene end round (`SCENE_END_ROUNDS_BY_PAIR[pairKey][sceneID]`), the app opens a decision checkpoint.
 8. Decision options route to next scene or `END_GAME`, based on the active pair's decision tree.
 9. `sceneLoader.js` updates session state, scene history, scene title, and starts the next scene.
 
@@ -100,20 +100,20 @@ Backward compatibility remains via `window.SCENE_DECISIONS` (mapped to `chef_vs_
 4. Register scene content into `SCENE_DATA_BY_PAIR[newPairKey][sceneID]`.
 5. Add metadata to `SCENE_META_BY_PAIR[newPairKey][sceneID]`.
 6. Add decision routes in `SCENE_DECISIONS_BY_PAIR[newPairKey]`.
-7. Configure scene-end rounds in `SCENE_END_ROUNDS` (or migrate to pair-specific round config if scene counts differ).
+7. Configure scene-end rounds in `pair-config.js` under `sceneEndRounds` (exposed as `SCENE_END_ROUNDS_BY_PAIR`).
 8. Flip `enabled: true` only when all required scenes and checkpoints are complete.
 
 ---
 
 ## 6) Important architecture note before content expansion
 
-`SCENE_END_ROUNDS` is currently global (shared across all pairs). If Pair B/C have different round counts per scene, move to:
+Scene round limits are now pair-aware:
 
 ```js
 SCENE_END_ROUNDS_BY_PAIR[pairKey][sceneID]
 ```
 
-Then update scene-end checks to read from active pair.
+Define these in each `PAIR_CONFIG[pairKey].sceneEndRounds` map.
 
 ---
 
@@ -124,3 +124,18 @@ Then update scene-end checks to read from active pair.
 3. Should role dropdowns hide disabled pairs automatically, or keep visible and show "not published" message?
 4. For scoring dashboards, should mindset bars adapt to the selected role's focused mindsets only, or keep all five universal bars?
 5. Do you want pair-specific CSV/JSON export naming (e.g., include `pairKey` in filename)?
+
+
+## 8) Starter templates
+
+Use these starter templates when creating a new pair:
+
+- `templates/conversation_TEMPLATE.js`
+- `templates/answer_key_TEMPLATE.js`
+- `templates/decision-template.js`
+
+Run validation with:
+
+```bash
+npm run validate:pair-template
+```

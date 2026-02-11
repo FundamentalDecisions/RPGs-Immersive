@@ -2,17 +2,6 @@
 // GAME LOGIC - Core Mechanics and Scoring
 // ============================================
 
-// === SCENE CONFIG (SAFE v1) ===
-const SCENE_END_ROUNDS = {
-  1: 10, // Scene 1 ends at round 10
-  2:9, // Scene 2 ends at round 9
-  3:7, // Scene 3 ends at round 7
-  4:8, // Scene 4 ends at round 8
-  5:4, // Scene 5 ends at round 4
-  6:9 // Scene 6 ends at round 9
-};
-
-
 // Game State
 let currentRound = 1;
 let currentStep = 0;
@@ -902,9 +891,11 @@ function submitResponse() {
 
   const sceneID = gameSession?.currentScene || 1;
 
-  // fallback to legacy behavior if scene config missing
+  const activePairKey = typeof getActivePairKey === 'function' ? getActivePairKey() : 'chef_vs_owner';
+
+  // pair-aware scene round limits with safe fallback to conversation max round
   const sceneEndRound =
-    SCENE_END_ROUNDS[sceneID] ??
+    (typeof getSceneEndRoundForPair === 'function' ? getSceneEndRoundForPair(activePairKey, sceneID) : null) ??
     Math.max(...CONVERSATION_DATA.map(d => d.round));
 
   if (currentRound <= sceneEndRound) {

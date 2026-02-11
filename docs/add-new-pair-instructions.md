@@ -120,7 +120,7 @@ Rules:
 
 File: `game-logic.js`
 
-Current system uses `SCENE_END_ROUNDS` globally. Until pair-specific rounds are introduced, new pair scenes should align with existing scene numbering/round assumptions.
+Set `sceneEndRounds` in `pair-config.js` for the new pair. Runtime reads these via `SCENE_END_ROUNDS_BY_PAIR[pairKey][sceneID]`.
 
 When Phase 2+ introduces pair-specific round config, update here accordingly.
 
@@ -150,3 +150,14 @@ After assets + decisions are complete and tested:
 node --check pair-config.js pair-manifest.js pair-runtime.js scene-decisions.js game-logic.js sceneLoader.js
 node --check conversations/scene*/conversation_*.js conversations/scene*/answer_key_*.js
 ```
+
+
+## 10) Validate template compliance
+
+After wiring manifest + content + decisions + round limits, run:
+
+```bash
+npm run validate:pair-template
+```
+
+It validates per pair/scene consistency for conversation, answer key, decision checkpoint, and `sceneEndRounds` alignment with conversation round counts.
