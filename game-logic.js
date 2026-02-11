@@ -320,6 +320,45 @@ function startRound() {
 }
 
 
+
+function normalizeRoleLabel(value) {
+  return (value || '')
+    .replace(/\s*\([^)]*\)\s*/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function isPlayerTurn(turnData) {
+  if (!turnData) return false;
+  if (typeof turnData.is_player === 'boolean') return turnData.is_player;
+
+  const gameSession = JSON.parse(sessionStorage.getItem('gameSession') || '{}');
+  const playerRole = normalizeRoleLabel(gameSession.playerRole || sessionData.playerRole || '');
+  const turnRole = normalizeRoleLabel(turnData.role || '');
+
+  if (playerRole && turnRole) {
+    return playerRole === turnRole;
+  }
+
+  return false;
+}
+
+function getTurnAtState(round, step) {
+  const roundTurns = CONVERSATION_DATA.filter((d) => d.round === round);
+  return roundTurns[step] || null;
+}
+
+function ensureNavigationPauseState() {
+  if (!manualPauseState?.isPaused) {
+    manualPauseState = {
+      isPaused: true,
+      pausedAt: getSingaporeDateTime(),
+      remainingSeconds: responseSeconds
+    };
+    window.manualPauseState = manualPauseState;
+  }
+}
+
 function displayCurrentTurn() {
   // Validate CONVERSATION_DATA exists
   if (!CONVERSATION_DATA) {
@@ -355,24 +394,24 @@ function displayCurrentTurn() {
         }
         // Schedule dialogue/player response after resource block appears
         setTimeout(() => {
-          turnData.speaker === 'Kenji'
-            ? displayComputerDialogue(turnData)
-            : displayPlayerResponse(turnData);
+          isPlayerTurn(turnData)
+            ? displayPlayerResponse(turnData)
+            : displayComputerDialogue(turnData);
         }, 1000);
       }, narrativeDelay);
     } else {
       // No resource block, proceed directly to dialogue/response
       setTimeout(() => {
-        turnData.speaker === 'Kenji'
-          ? displayComputerDialogue(turnData)
-          : displayPlayerResponse(turnData);
+          isPlayerTurn(turnData)
+            ? displayPlayerResponse(turnData)
+            : displayComputerDialogue(turnData);
       }, narrativeDelay);
     }
 
   } else {
-    turnData.speaker === 'Kenji'
-      ? displayComputerDialogue(turnData)
-      : displayPlayerResponse(turnData);
+          isPlayerTurn(turnData)
+            ? displayPlayerResponse(turnData)
+            : displayComputerDialogue(turnData);
   }
 }
 
@@ -550,7 +589,7 @@ function submitResponse() {
   if (responseTimer) clearInterval(responseTimer);
 
   const currentData = CONVERSATION_DATA.find(
-    (d) => d.round === currentRound && d.speaker === 'Mira'
+    (d) => d.round === currentRound && isPlayerTurn(d)
   );
   if (!currentData || !currentData.blanks) return;
 
@@ -1186,7 +1225,13 @@ function loadDecisionCheckpointBarrier(sceneID) {
     const playerDecision = gameSession?.playerDecisions?.[`scene${sceneID}`];
 
     if (!playerDecision) {
-      console.log(`No decision made for scene ${sceneID} yet`);
+      const isHistorical = sceneID !== actualCurrentScene;
+      const message = `No decision made for scene ${sceneID} yet`;
+      if (isHistorical) {
+        console.error(`Invariant violation: ${message}`);
+      } else {
+        console.log(message);
+      }
       return;
     }
 
@@ -1206,8 +1251,11 @@ function loadDecisionCheckpointBarrier(sceneID) {
     const barrierHTML = `
       <div id="checkpoint-barrier-overlay" style="margin: 30px 0 0 0; padding: 15px; background: #f9f9f9; border-left: 4px solid #8ba89c; border-radius: 4px;">
         <div style="font-size: 12px; color: #999; margin-bottom: 8px;">Scene ${sceneID} - Decision Checkpoint</div>
+        <div style="font-size: 13px; color: #2c3e3c; margin-bottom: 6px;">
+          <strong>Question:</strong> ${scene.decisionCheckpoint.question}
+        </div>
         <div style="font-size: 14px; color: #2c3e3c; font-weight: 500;">
-          ${selectedOption.optionLabel}: ${selectedOption.optionText}
+          <strong>Selected:</strong> ${selectedOption.optionLabel}: ${selectedOption.optionText}
         </div>
       </div>
     `;
@@ -1359,10 +1407,9 @@ function navigatePreviousScene() {
   isViewingHistoricalScene = (previousScene !== actualCurrentScene);
   console.log(`isViewingHistoricalScene set to: ${isViewingHistoricalScene}`);
 
-  // STEP 5: SHOW/HIDE HISTORICAL BANNER AND DISABLE INPUT
+  // STEP 5: DISABLE INPUT FOR HISTORICAL VIEW (NO HISTORICAL BANNER)
   if (isViewingHistoricalScene) {
-    setTimeout(() => showHistoricalViewBanner(), 100);
-    // Disable response input area
+    hideHistoricalViewBanner();
     const inputArea = document.getElementById('response-input-area');
     if (inputArea) {
       inputArea.style.display = 'none';
@@ -1464,29 +1511,42 @@ function navigateNextScene() {
 
   // STEP 4: DETERMINE IF RETURNING TO ACTUAL CURRENT SCENE
   if (nextScene === actualCurrentScene) {
-    console.log('Returning to actual current scene, resuming conversation');
+    console.log('Returning to actual current scene in paused mode, waiting for Play');
     isViewingHistoricalScene = false;
     actualCurrentScene = nextScene;
     window.actualCurrentScene = actualCurrentScene;
-    // Sync session state before resume validation/auto-fix logic runs
+
     gameSession.currentScene = nextScene;
     gameSession.currentSceneHistoryIndex = nextSceneIndex;
     gameSession.isViewingHistoricalScene = false;
-    sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
 
-    resumeActiveConversation();
+    ensureNavigationPauseState();
     hideHistoricalViewBanner();
+
+    const pausedState = gameSession.pausedConversationState || pausedConversationState;
+    if (pausedState) {
+      currentRound = pausedState.currentRound;
+      currentStep = pausedState.currentStep;
+      responseSeconds = pausedState.responseSeconds;
+      const activeTurn = getTurnAtState(currentRound, currentStep);
+      isResponseInputActive = isPlayerTurn(activeTurn);
+    }
+
+    sessionStorage.setItem("gameSession", JSON.stringify(gameSession));
+    syncSessionStateToGlobal();
+    updateResponseInputAreaVisibility();
     applyManualPauseUI();
   } else {
     console.log('Navigating to another historical scene');
     isViewingHistoricalScene = true;
-    // Disable response input area
+    hideHistoricalViewBanner();
+
     const inputArea = document.getElementById('response-input-area');
     if (inputArea) {
       inputArea.style.display = 'none';
       inputArea.classList.add('disabled-overlay');
     }
-    setTimeout(() => showHistoricalViewBanner(), 100);
+
     applyManualPauseUI();
   }
 
@@ -1594,9 +1654,15 @@ function resumeManualPause() {
 
   window.manualPauseState = manualPauseState;
 
+  const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
+
+  if (gameSession?.pausedConversationState) {
+    resumeActiveConversation();
+    return;
+  }
+
   applyManualPauseUI();
 
-  const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   const shouldResumeTimer = (gameSession?.currentScene === actualCurrentScene) &&
     !isViewingHistoricalScene &&
     isResponseInputActive &&
@@ -1649,20 +1715,14 @@ function pauseActiveConversation() {
   // Keep any in-progress typed draft when navigating away so returning + Play can resume
   // the same waiting-for-player state instead of silently auto-submitting empty blanks.
 
-  // 5) SET GLOBAL FLAG
-  isViewingHistoricalScene = true;
-  
+  // 5) KEEP TURN OWNERSHIP STATE FOR RESUME
+  const activeTurn = getTurnAtState(currentRound, currentStep);
+  isResponseInputActive = isPlayerTurn(activeTurn);
+
   // 6) ALIGN AUTO-PAUSE WITH MANUAL PAUSE UX
-  // If user did not manually pause, navigation pause should still require explicit Play to continue.
-  if (!manualPauseState?.isPaused) {
-    manualPauseState = {
-      isPaused: true,
-      pausedAt: getSingaporeDateTime(),
-      remainingSeconds: responseSeconds
-    };
-    window.manualPauseState = manualPauseState;
-    console.log('✅ Navigation pause converted to manual-style paused state');
-  }
+  // Navigation pause always requires explicit Play to continue.
+  ensureNavigationPauseState();
+  console.log('✅ Navigation pause converted to manual-style paused state');
 
   // 7) PERSIST PAUSED STATE TO SESSION
   syncGlobalStateToSession();
@@ -1678,54 +1738,52 @@ function resumeActiveConversation() {
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   let state = null;
 
-  // 1) RESTORE PAUSED CONVERSATION STATE
   if (gameSession && gameSession.pausedConversationState) {
     state = gameSession.pausedConversationState;
     currentRound = state.currentRound;
     currentStep = state.currentStep;
     responseSeconds = state.responseSeconds;
-    const roundTurns = CONVERSATION_DATA.filter(d => d.round === currentRound);
-    const activeTurn = roundTurns[currentStep];
-    isResponseInputActive = Boolean(activeTurn?.speaker !== 'Kenji');
+
+    const activeTurn = getTurnAtState(currentRound, currentStep);
+    isResponseInputActive = isPlayerTurn(activeTurn);
     console.log(`✅ Restored Round ${currentRound}, Step ${currentStep}`);
   }
 
-  // 2) CLEAR PAUSED STATE
   pausedConversationState = null;
   console.log('✅ Paused state cleared');
 
-  // 3) RESET HISTORICAL FLAG
   isViewingHistoricalScene = false;
   console.log('✅ Historical view flag reset');
 
-  // 4) SHOW/HIDE RESPONSE INPUT AREA ACCORDING TO CURRENT TURN
-  updateResponseInputAreaVisibility();
-  console.log('✅ Response input area visibility refreshed');
+  const activeTurn = getTurnAtState(currentRound, currentStep);
+  const activePlayerTurn = isPlayerTurn(activeTurn);
+  isResponseInputActive = activePlayerTurn;
 
+  // Continue pipeline for computer turns; keep player turns waiting for input.
+  if (activeTurn && !activePlayerTurn) {
+    console.log('⏯ Resuming from computer turn, continuing pipeline');
+    displayCurrentTurn();
+  } else {
+    updateResponseInputAreaVisibility();
+    console.log('✅ Response input area visibility refreshed');
+  }
 
-  // 6) RESTART TIMER IF NEEDED
-  if (state && state.isTimerActive && !manualPauseState?.isPaused) {
+  if (state && state.isTimerActive && !manualPauseState?.isPaused && activePlayerTurn) {
     startResponseTimer(state.responseSeconds);
     console.log('✅ Timer restarted');
   }
 
-  // 7) SYNC STATE TO SESSION
   syncGlobalStateToSession();
+  applyManualPauseUI();
 
-  if (manualPauseState?.isPaused) {
-    applyManualPauseUI();
-  }  
-  
   console.log(`✅ Conversation resumed at Round ${currentRound}, Step ${currentStep}`);
   console.log('=== RESUME COMPLETE ===');
 
-  // Auto-validate and fix any state inconsistencies
   const validation = validateGameState();
   if (validation.warnings.length > 0) {
     console.warn('State warnings after resume:', validation.warnings);
     autoFixGameState();
   }
-
 }
 
 
@@ -1735,19 +1793,13 @@ function isOnActualCurrentScene() {
 }
 
 function showHistoricalViewBanner() {
+  // Historical banner is deprecated for navigation flow. Keep hidden.
   const banner = document.getElementById('historical-view-banner');
-  const inputArea = document.getElementById('response-input-area');
-  
   if (banner) {
-    banner.classList.remove('hidden');
+    banner.classList.add('hidden');
   }
-  
-  if (inputArea) {
-    inputArea.classList.add('disabled-overlay');
-  }
-  
   updatePausePlayButtonState();
-  console.log('Historical view banner shown');
+  console.log('Historical view banner suppressed (deprecated)');
 }
 
 function hideHistoricalViewBanner() {
@@ -1879,6 +1931,56 @@ function manageTimerForSceneState() {
 
 // === NEW: COMPREHENSIVE STATE VALIDATION ===
 
+
+function enforceSceneProgressionInvariant(gameSession) {
+  if (!gameSession || !Array.isArray(gameSession.sceneHistory) || gameSession.sceneHistory.length === 0) {
+    return { corrected: false, notes: [] };
+  }
+
+  const notes = [];
+  let corrected = false;
+  const lastHistoricalScene = gameSession.sceneHistory[gameSession.sceneHistory.length - 1];
+
+  if (gameSession.actualCurrentScene !== lastHistoricalScene) {
+    notes.push(`actualCurrentScene corrected ${gameSession.actualCurrentScene} -> ${lastHistoricalScene}`);
+    gameSession.actualCurrentScene = lastHistoricalScene;
+    actualCurrentScene = lastHistoricalScene;
+    window.actualCurrentScene = actualCurrentScene;
+    corrected = true;
+  }
+
+  if (gameSession.currentScene === gameSession.actualCurrentScene) {
+    if (gameSession.isViewingHistoricalScene) {
+      gameSession.isViewingHistoricalScene = false;
+      isViewingHistoricalScene = false;
+      window.isViewingHistoricalScene = false;
+      notes.push('isViewingHistoricalScene reset to false on active scene');
+      corrected = true;
+    }
+  } else if (!gameSession.isViewingHistoricalScene) {
+    gameSession.isViewingHistoricalScene = true;
+    isViewingHistoricalScene = true;
+    window.isViewingHistoricalScene = true;
+    notes.push('isViewingHistoricalScene corrected to true on historical scene');
+    corrected = true;
+  }
+
+  const decisions = getDecisionTreeForActivePair() || {};
+  const sceneDecisions = gameSession.playerDecisions || {};
+  const historicalScenes = gameSession.sceneHistory.slice(0, -1);
+  historicalScenes.forEach((sceneID) => {
+    if (decisions[`scene${sceneID}`] && !sceneDecisions[`scene${sceneID}`]) {
+      notes.push(`missing decision for historical scene ${sceneID}`);
+    }
+  });
+
+  if (corrected) {
+    sessionStorage.setItem('gameSession', JSON.stringify(gameSession));
+  }
+
+  return { corrected, notes };
+}
+
 function validateGameState() {
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   const errors = [];
@@ -1927,7 +2029,23 @@ function validateGameState() {
     warnings.push(`Timer state mismatch: Timer active=${timerActive}, Should be active=${shouldBeActive}`);
   }
 
-  // VALIDATION 7: Check if pausedConversationState is set when needed
+  // VALIDATION 7: actualCurrentScene should always be the last scene in history
+  if (Array.isArray(gameSession?.sceneHistory) && gameSession.sceneHistory.length > 0) {
+    const lastScene = gameSession.sceneHistory[gameSession.sceneHistory.length - 1];
+    if (actualCurrentScene !== lastScene) {
+      warnings.push(`actualCurrentScene (${actualCurrentScene}) should equal last sceneHistory entry (${lastScene})`);
+    }
+
+    const decisions = getDecisionTreeForActivePair() || {};
+    const historicalScenes = gameSession.sceneHistory.slice(0, -1);
+    historicalScenes.forEach((sceneID) => {
+      if (decisions[`scene${sceneID}`] && !gameSession?.playerDecisions?.[`scene${sceneID}`]) {
+        errors.push(`Historical scene ${sceneID} is missing saved decision`);
+      }
+    });
+  }
+
+  // VALIDATION 8: Check if pausedConversationState is set when needed
   if (gameSession?.currentScene !== actualCurrentScene && isViewingHistoricalScene && !pausedConversationState) {
     warnings.push('On inactive scene but no pausedConversationState stored');
   }
@@ -1956,6 +2074,11 @@ function autoFixGameState() {
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   let fixesApplied = [];
 
+  const invariantResult = enforceSceneProgressionInvariant(gameSession);
+  if (invariantResult.corrected) {
+    fixesApplied.push(...invariantResult.notes);
+  }
+
   // FIX 1: Sync actualCurrentScene
   if (actualCurrentScene !== gameSession?.actualCurrentScene) {
     console.log(`Fixing: actualCurrentScene ${actualCurrentScene} → ${gameSession?.actualCurrentScene}`);
@@ -1982,8 +2105,8 @@ function autoFixGameState() {
 
   // FIX 5: Update banner visibility
   if (isViewingHistoricalScene) {
-    showHistoricalViewBanner();
-    fixesApplied.push('Historical view banner shown');
+    hideHistoricalViewBanner();
+    fixesApplied.push('Historical view banner suppressed');
   } else {
     hideHistoricalViewBanner();
     fixesApplied.push('Historical view banner hidden');
@@ -2052,7 +2175,7 @@ function syncSessionStateToGlobal() {
   const gameSession = JSON.parse(sessionStorage.getItem("gameSession"));
   if (gameSession) {
     actualCurrentScene = gameSession.actualCurrentScene || actualCurrentScene;
-    isViewingHistoricalScene = gameSession.isViewingHistoricalScene || false;
+    isViewingHistoricalScene = Boolean(gameSession.isViewingHistoricalScene);
     pausedConversationState = gameSession.pausedConversationState || null;
     manualPauseState = gameSession.manualPauseState || {
       isPaused: false,
