@@ -834,6 +834,8 @@ function submitResponse() {
 
   markTurnCompleted(gameSession?.currentScene || 1, currentData.uid);
 
+  markTurnCompleted(gameSession?.currentScene || 1, currentData.uid);
+
   sessionData.responses.push(responseDetails);
 
   // 1) MINDSET scoring (existing)
