@@ -1543,9 +1543,44 @@ window.SCENE_DATA[1].answerKey = [
       valueHunter: 2,
       experimenter: 0
     }
+  },
+
+  // =====================================================
+  // B10-3  (REASON) – "because [B10-3]"
+  // =====================================================
+  {
+    blankUID: "B10-3",
+    conceptGroup: "Reason - Shared Accountability",
+    keywords: [
+      "if we don't learn from this", "we'll repeat the same mistakes", "we owe it to the team",
+      "we need to be accountable", "we need to close this properly"
+    ],
+    scoring: {
+      systemsThinker: 3,
+      resourceCraftsman: 0,
+      calmStrategist: 3,
+      valueHunter: 2,
+      experimenter: 0
+    }
+  },
+  {
+    blankUID: "B10-3",
+    conceptGroup: "Reason - Better Next Decision",
+    keywords: [
+      "next decision must be better", "we need evidence before committing", "understand the trade-offs first",
+      "test assumptions before deciding"
+    ],
+    scoring: {
+      systemsThinker: 4,
+      resourceCraftsman: 0,
+      calmStrategist: 2,
+      valueHunter: 2,
+      experimenter: 1
+    }  
   }
 ];
 
 if (!window.SCENE_DATA_BY_PAIR) window.SCENE_DATA_BY_PAIR = {};
 if (!window.SCENE_DATA_BY_PAIR.chef_vs_owner) window.SCENE_DATA_BY_PAIR.chef_vs_owner = {};
 if (!window.SCENE_DATA_BY_PAIR.chef_vs_owner[1]) window.SCENE_DATA_BY_PAIR.chef_vs_owner[1] = window.SCENE_DATA[1];
+
