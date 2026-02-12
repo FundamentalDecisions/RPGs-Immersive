@@ -109,7 +109,28 @@ const SCENE_DECISIONS_BY_PAIR = {
   },
 
   // Structure ready for expansion - content files can be added scene-by-scene.
-  owner_vs_floor_manager: {},
+  owner_vs_floor_manager: {
+    scene1: {
+      sceneID: 1,
+      decisionCheckpoint: {
+        question: 'What would you say in your speech?',
+        options: [
+          {
+            optionID: 'A',
+            optionLabel: 'Option A (LEARNING FORWARD)',
+            optionText: `Three years ago, we opened Ember & Spoon believing that quality food and genuine hospitality would be enough. Tonight, looking at all of you here, I realize we built something that mattered. But I also have to be honest—we failed in ways I'm only now understanding. We didn't listen fast enough. We didn't adapt when the market shifted. We focused on perfection in the kitchen while missing what was happening in the dining room. You deserved better operational excellence, and I'm sorry we didn't deliver it. What you gave us—your loyalty, your trust, your presence tonight—that's the part I'll carry forward. Thank you for teaching me what truly matters in this business`,
+            outcome: 'END_GAME'
+          },
+          {
+            optionID: 'B',
+            optionLabel: 'Option B (GRATITUDE & CLOSURE)',
+            optionText: `When we started Ember & Spoon, I thought success meant critical acclaim and full reservations every night. Tonight taught me I was measuring the wrong things. Success is you—the Lim family who celebrated every milestone here, the couple at Table 11 who chose us for four anniversaries, the teams who made this your meeting place, the regulars who became friends. We're closing not because we failed at creating something meaningful, but because meaningful isn't always sustainable. What we built together—these relationships, these moments, the way we showed up for each other—that doesn't end tonight. Thank you for the last 5 extraordinary years.`,
+            outcome: 'END_GAME'
+          }
+        ]
+      }
+    }
+  },
   floor_manager_vs_supplier: {}
 };
 

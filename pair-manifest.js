@@ -28,7 +28,12 @@ const PAIR_CONTENT_MANIFEST = {
     }
   },
   owner_vs_floor_manager: {
-    scenes: {}
+    scenes: {
+      1: {
+        conversationScript: 'conversations/scene1/conversation_owner_vs_floor_manager.js',
+        answerKeyScript: 'conversations/scene1/answer_key_owner_vs_floor_manager.js'
+      }
+    }
   },
   floor_manager_vs_supplier: {
     scenes: {}

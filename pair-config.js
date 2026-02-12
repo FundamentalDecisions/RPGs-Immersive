@@ -20,9 +20,11 @@ const PAIR_CONFIG = {
     label: 'Restaurant Owner vs Floor Manager',
     playerRole: 'The Restaurant Owner (Kenji)',
     computerRole: 'The Floor Manager (Aiden)',
-    scenes: [],
-    sceneEndRounds: {},
-    enabled: false,
+    scenes: [1],
+    sceneEndRounds: {
+      1: 7
+    },
+    enabled: true,
     notes: 'Structure placeholder. Add conversation/answer-key files, then mark enabled=true.'
   },
   floor_manager_vs_supplier: {

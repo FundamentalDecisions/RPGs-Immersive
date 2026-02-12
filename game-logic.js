@@ -1017,9 +1017,19 @@ function scoreRound(responses) {
     experimenter: 0,
   };
 
+  const mindsetKeyMap = {
+    systemsThinker: 'systemsThinker',
+    resourceCraftsman: 'resourceCraftsman',
+    calmStrategist: 'calmStrategist',
+    strategistMindset: 'calmStrategist',
+    valueHunter: 'valueHunter',
+    soulBuilder: 'resourceCraftsman',
+    experimenter: 'experimenter',
+    innovationMindset: 'experimenter'
+  };
+
   Object.keys(responses).forEach((blankUID) => {
     const playerInput = responses[blankUID].toLowerCase();
-    const wordCount = playerInput.split(/\s+/).length;
 
     ANSWER_KEY_DATA.filter((ak) => ak.blankUID === blankUID).forEach(
       (answerKey) => {
@@ -1031,9 +1041,12 @@ function scoreRound(responses) {
 
         if (matchCount >= 1) {
           Object.keys(answerKey.scoring).forEach((mindset) => {
-            scores[mindset] += answerKey.scoring[mindset];
+            const canonicalMindset = mindsetKeyMap[mindset] || mindset;
+            if (Object.prototype.hasOwnProperty.call(scores, canonicalMindset)) {
+              scores[canonicalMindset] += answerKey.scoring[mindset];
+            }
           });
-        }        
+        }
       }
     );
   });
